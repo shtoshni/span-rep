@@ -93,7 +93,7 @@ class Encoder(nn.Module):
             batch_ids, attention_mask=input_mask)  # B x L x E
 
         # Encoded layers also has the embedding layer - 0th entry
-        print (len(encoded_layers))
+        logging.info("Num layers + Embedding layer: %d" % len(encoded_layers))
         encoded_layers = encoded_layers[1:]
 
         wtd_encoded_repr = 0
@@ -123,6 +123,6 @@ class Encoder(nn.Module):
 
 
 if __name__=='__main__':
-    model = Encoder().cuda()
+    model = Encoder(model='roberta').cuda()
     tokenized_input = model.tokenize_input("Hello world!")  # 1 x L
     model.encode_tokens(tokenized_input).shape
