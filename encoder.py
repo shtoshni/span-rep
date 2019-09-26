@@ -89,8 +89,12 @@ class Encoder(nn.Module):
         """
         input_mask = (batch_ids > 0).cuda().float()
         print (self.model.config.output_hidden_states)
-        last_hidden_state, _, encoded_layers, _ = self.model(
+        (last_hidden_state, pooled_output), encoded_layers = self.model(
             batch_ids, attention_mask=input_mask)  # B x L x E
+
+        # Encoded layers also has the embedding layer - 0th entry
+        print (len(encoded_layers))
+        encoded_layers = encoded_layers[1:]
 
         wtd_encoded_repr = 0
         soft_weight = nn.functional.softmax(self.weighing_params, dim=0)
