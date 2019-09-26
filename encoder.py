@@ -123,6 +123,6 @@ class Encoder(nn.Module):
 
 
 if __name__=='__main__':
-    model = Encoder(model='roberta').cuda()
+    model = Encoder(model='gpt2').cuda()
     tokenized_input = model.tokenize_input("Hello world!")  # 1 x L
     model.encode_tokens(tokenized_input).shape
