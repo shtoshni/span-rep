@@ -67,6 +67,7 @@ class Encoder(nn.Module):
             for param in self.model.parameters():
                 param.requires_grad = False
 
+        self.model.config.output_hidden_states = True
         # Set parameters required on top of pre-trained models
         self.weighing_params = nn.Parameter(torch.ones(self.num_layers))
 
@@ -87,9 +88,8 @@ class Encoder(nn.Module):
         batch_ids: B x L
         """
         input_mask = (batch_ids > 0).cuda().float()
-        encoded_layers, _ = self.model(
-            batch_ids, attention_mask=input_mask,
-            output_all_encoded_layers=True)  # B x L x E
+        last_hidden_state, _, encoded_layers, _ = self.model(
+            batch_ids, attention_mask=input_mask)  # B x L x E
 
         wtd_encoded_repr = 0
         soft_weight = nn.functional.softmax(self.weighing_params, dim=0)
