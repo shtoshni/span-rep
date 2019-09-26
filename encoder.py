@@ -88,6 +88,7 @@ class Encoder(nn.Module):
         batch_ids: B x L
         """
         input_mask = (batch_ids > 0).cuda().float()
+        print (self.model.config.output_hidden_states)
         last_hidden_state, _, encoded_layers, _ = self.model(
             batch_ids, attention_mask=input_mask)  # B x L x E
 
