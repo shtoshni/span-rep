@@ -76,7 +76,9 @@ class Encoder(nn.Module):
 
 for model in MODEL_LIST:
     if 'gpt2' in model:
-        print (model)
-        for model_type in GPT2_MODEL_SIZES:
-            print (model_type)
-            encoder = Encoder(model=model, model_type=model_type)
+        model_type_list = GPT2_MODEL_SIZES
+    else:
+        model_type_list = BERT_MODEL_SIZES
+    for model_type in model_type_list:
+        print (model_type)
+        encoder = Encoder(model=model, model_type=model_type)
