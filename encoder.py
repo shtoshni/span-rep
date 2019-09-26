@@ -59,7 +59,7 @@ class Encoder(nn.Module):
             if model_type:
                 model_name += "-" + model_type
 
-            self.model = GPT2Model.from_pretrained(model_name)
+            self.model = GPT2Model.from_pretrained(model_name, output_hidden_states=True)
             self.tokenizer = GPT2Tokenizer.from_pretrained(model_name)
             self.num_layers = self.model.config.n_layer
             self.hidden_size = self.model.config.n_embd
@@ -123,6 +123,6 @@ class Encoder(nn.Module):
 
 
 if __name__=='__main__':
-    model = Encoder(model='gpt2').cuda()
+    model = Encoder(model='gpt2', model_type='').cuda()
     tokenized_input = model.tokenize_input("Hello world!")  # 1 x L
     model.encode_tokens(tokenized_input).shape
