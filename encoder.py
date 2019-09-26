@@ -80,7 +80,7 @@ class Encoder(nn.Module):
         sentence: a whole string containing all the tokens (NOT A LIST).
         """
         return torch.tensor(self.tokenizer.encode(sentence, max_length=max_length,
-            add_special_tokens=True)).unsqueeze(dim=0)
+            add_special_tokens=True)).unsqueeze(dim=0).cuda()
 
     def encode_tokens(self, batch_ids):
         """
