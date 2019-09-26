@@ -41,10 +41,12 @@ class Encoder(nn.Module):
 
             print (model_name)
             if model == 'bert':
-                self.model = BertModel.from_pretrained(model_name)
+                self.model = BertModel.from_pretrained(model_name,
+                    output_hidden_states=True)
                 self.tokenizer = BertTokenizer.from_pretrained(model_name)
             elif model == 'roberta':
-                self.model = RobertaModel.from_pretrained(model_name)
+                self.model = RobertaModel.from_pretrained(model_name,
+                    output_hidden_states=True)
                 self.tokenizer = RobertaTokenizer.from_pretrained(model_name)
             # elif model == 'spanbert':
 
@@ -67,7 +69,6 @@ class Encoder(nn.Module):
             for param in self.model.parameters():
                 param.requires_grad = False
 
-        self.model.config.output_hidden_states = True
         # Set parameters required on top of pre-trained models
         self.weighing_params = nn.Parameter(torch.ones(self.num_layers))
 
@@ -88,13 +89,12 @@ class Encoder(nn.Module):
         batch_ids: B x L
         """
         input_mask = (batch_ids > 0).cuda().float()
-        print (self.model.config.output_hidden_states)
         outputs = self.model(
             batch_ids, attention_mask=input_mask)  # B x L x E
         print (outputs)
         print (len(outputs))
-        print (outputs[1].shape)
         print (outputs[0].shape)
+        print (outputs[1].shape)
 
         # Encoded layers also has the embedding layer - 0th entry
         # print (len(encoded_layers))
