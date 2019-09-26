@@ -93,9 +93,11 @@ class Encoder(nn.Module):
             batch_ids, attention_mask=input_mask)  # B x L x E
         print (outputs)
         print (len(outputs))
+        print (outputs[1].shape)
+        print (outputs[0].shape)
 
         # Encoded layers also has the embedding layer - 0th entry
-        print (len(encoded_layers))
+        # print (len(encoded_layers))
         encoded_layers = encoded_layers[1:]
 
         wtd_encoded_repr = 0
