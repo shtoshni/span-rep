@@ -89,15 +89,11 @@ class Encoder(nn.Module):
         batch_ids: B x L
         """
         input_mask = (batch_ids > 0).cuda().float()
-        outputs = self.model(
+        last_hidden_states, _,  encoded_layers = self.model(
             batch_ids, attention_mask=input_mask)  # B x L x E
-        print (outputs)
-        print (len(outputs))
-        print (outputs[0].shape)
-        print (outputs[1].shape)
 
         # Encoded layers also has the embedding layer - 0th entry
-        # print (len(encoded_layers))
+        print (len(encoded_layers))
         encoded_layers = encoded_layers[1:]
 
         wtd_encoded_repr = 0
