@@ -7,6 +7,7 @@ from transformers import *
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 MODEL_LIST = ['bert', 'roberta', 'gpt2']
+# MODEL_LIST = ['bert', 'spanbert', ''roberta', 'gpt2']
 BERT_MODEL_SIZES = ['base', 'large']
 GPT2_MODEL_SIZES = ['', 'medium', 'large']
 
@@ -73,12 +74,50 @@ class Encoder(nn.Module):
         self.attention_weight = nn.Parameter(torch.ones(self.hidden_size))
 
 
+    def tokenize_input(self, sentence, max_length=512):
+        """
+        sentence: a whole string containing all the tokens (NOT A LIST).
+        """
+        return torch.tensor(tokenizer.encode(sentence, max_length=max_length,
+            add_special_tokens=True)).unsqueeze(dim=0)
 
-for model in MODEL_LIST:
-    if 'gpt2' in model:
-        model_type_list = GPT2_MODEL_SIZES
-    else:
-        model_type_list = BERT_MODEL_SIZES
-    for model_type in model_type_list:
-        print (model_type)
-        encoder = Encoder(model=model, model_type=model_type)
+    def encode_tokens(self, batch_ids):
+        """
+        Encode a batch of token IDs with a learned
+        batch_ids: B x L
+        """
+        input_mask = (batch_ids > 0).cuda().float()
+        encoded_layers, _ = self.model(
+            batch_ids, attention_mask=input_mask,
+            output_all_encoded_layers=True)  # B x L x E
+
+        wtd_encoded_repr = 0
+        soft_weight = nn.functional.softmax(self.weighing_params, dim=0)
+
+        for i in range(self.num_layers):
+            wtd_encoded_repr += soft_weight[i] * encoded_layers[i]
+
+        return wtd_encoded_repr
+
+    def span_diff(self, encoded_input, start_idx, end_idx):
+        """Does the difference based span representation: h_j - h_i
+        encoded_input: B x L x H
+        start_idx: integer
+        end_idx: integer
+        """
+        span_repr = encoded_input[:, end_idx, :] - encoded_input[:, start_idx, :]
+        return span_repr
+
+    def span_avg(self, encoded_input, start_idx, end_idx):
+        span_repr = 0
+        span_length = (end_idx - start_idx + 1)
+        assert(span_length > 0)
+        for idx in range(start_idx, end_idx + 1):
+            span_repr += encoded_input[:, idx, :]/span_length
+        return span_repr
+
+
+if __name__=='__main__':
+    model = Encoder()
+    tokenized_input = model.tokenize_input("Hello world!")  # 1 x L
+    model.encode_tokens(tokenized_input).shape
