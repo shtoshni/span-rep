@@ -101,7 +101,7 @@ class Encoder(nn.Module):
             sentence, max_length=max_length,
             add_special_tokens=True)).unsqueeze(dim=0).cuda()
 
-    def encode_tokens(self, batch_ids):
+    def encode_tokens(self, batch_ids, just_last_layer=False):
         """
         Encode a batch of token IDs with a learned
         batch_ids: B x L
@@ -110,17 +110,19 @@ class Encoder(nn.Module):
         last_hidden_states, _,  encoded_layers = self.model(
             batch_ids, attention_mask=input_mask)  # B x L x E
 
-        # Encoded layers also has the embedding layer - 0th entry
-        logging.info("Num layers + Embedding layer: %d" % len(encoded_layers))
-        encoded_layers = encoded_layers[1:]
+        if just_last_layer:
+            return last_hidden_states
+        else:
+            # Encoded layers also has the embedding layer - 0th entry
+            encoded_layers = encoded_layers[1:]
 
-        wtd_encoded_repr = 0
-        soft_weight = nn.functional.softmax(self.weighing_params, dim=0)
+            wtd_encoded_repr = 0
+            soft_weight = nn.functional.softmax(self.weighing_params, dim=0)
 
-        for i in range(self.num_layers):
-            wtd_encoded_repr += soft_weight[i] * encoded_layers[i]
+            for i in range(self.num_layers):
+                wtd_encoded_repr += soft_weight[i] * encoded_layers[i]
 
-        return wtd_encoded_repr
+            return wtd_encoded_repr
 
     def span_diff(self, encoded_input, start_idx, end_idx):
         """Does the difference based span representation: h_j - h_i
@@ -142,6 +144,11 @@ class Encoder(nn.Module):
 
 
 if __name__ == '__main__':
-    model = Encoder(model='bert', model_type='large').cuda()
-    tokenized_input = model.tokenize_input("Hello world!")  # 1 x L
-    model.encode_tokens(tokenized_input).shape
+    for model in MODEL_LIST:
+        for model_type in BERT_MODEL_SIZES + GPT2_MODEL_SIZES:
+            try:
+                model = Encoder(model=model, model_type=model_type)
+                tokenized_input = model.tokenize_input("Hello world!")  # 1 x L
+                model.encode_tokens(tokenized_input).shape
+            except:
+                pass
