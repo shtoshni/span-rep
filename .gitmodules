@@ -1,0 +1,3 @@
+[submodule "diora"]
+	path = diora
+	url = https://github.com/ExplorerFreda/diora.git
