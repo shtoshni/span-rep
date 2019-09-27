@@ -23,24 +23,36 @@ from encoder import Encoder
 from dataset import load_data, ID_TO_LABEL, MASK_LABEL
 
 
-def main():
+def get_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser()
 
     # Add arguments to parser
-    parser.add_argument('-model', default='bert',
+    parser.add_argument('-pretrained_model', default='bert',
                         help='Pretrained model', type=str)
     parser.add_argument('-model_type', default='base',
                         help='Specific model type', type=str)
+    parser.add_argument('-fine_tune', default=False, action="store_true",
+                        help='If true then finetune the pretrained model.')
+
+    return parser.parse_args()
 
 
-class BertNER(torch.nn.Module):
-    def __init__(self, hidden_size=768, num_layers=12):
+class PretrainedModelNER(torch.nn.Module):
+    def __init__(self, model='bert', model_type='base', fine_tune=False):
         super().__init__()
-        self.linear = torch.nn.Linear(hidden_size, len(ID_TO_LABEL))
+        self.encoder = Encoder(model=model, model_type=model_type,
+                               fine_tune=fine_tune)
+        self.tokenizer = self.encoder.tokenizer
 
-    def forward(self, model_output):
+        self.linear = torch.nn.Linear(
+            self.encoder.hidden_size, len(ID_TO_LABEL))
+
+    def forward(self, batch_indices):
+        model_output = self.encoder.encode_tokens(
+            batch_indices, just_last_layer=True)
         return self.linear(model_output)[:, 1:-1, :]
+
 
 def batcher(examples, labels, label_masks, batch_size=32, shuffle=False):
     indices = list(range(len(examples)))
@@ -67,16 +79,14 @@ def batcher(examples, labels, label_masks, batch_size=32, shuffle=False):
 
         yield example_arr, mask_arr, label_arr, label_mask_arr
 
-def evaluate(out_dir, bert_model, classifier, data):
+def evaluate(out_dir, model, data):
     proc_in = []
 
     tokens = 0
     correct = 0
-    for examples, masks, labels, label_masks in batcher(*data, batch_size=128):
+    for examples, masks, labels, label_masks in batcher(*data, batch_size=32):
         with torch.no_grad():
-            bert_output = bert_model.encode_tokens(torch.tensor(examples).cuda())
-
-            logits = classifier(bert_output).cpu().detach().numpy()
+            logits = model(torch.tensor(examples).cuda()).cpu().detach().numpy()
             predictions = np.argmax(logits, axis=-1)
             correct += np.sum((predictions == labels) * label_masks)
             tokens += np.sum(label_masks)
@@ -109,20 +119,18 @@ def evaluate(out_dir, bert_model, classifier, data):
     return f1
 
 
-def main():
+def main(pretrained_model, model_type, fine_tune):
     num_epochs = 20
 
-    encoder = Encoder(fine_tune=True)
-    bert_model = encoder.cuda()
+    model = PretrainedModelNER(
+        model=pretrained_model, model_type=model_type,
+        fine_tune=fine_tune)
+    model.cuda()
 
-    classifier = BertNER(hidden_size=encoder.hidden_size,
-                         num_layers=encoder.num_layers)
-    classifier.cuda()
-
-    tokenizer = encoder.tokenizer
+    tokenizer = model.tokenizer
 
     data = load_data(Path('data'), tokenizer=tokenizer, bio=True)
-    optimizer = torch.optim.Adam(classifier.parameters(), lr=3e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     loss = torch.nn.CrossEntropyLoss(reduction='none')
 
@@ -135,13 +143,11 @@ def main():
 
         for examples, masks, labels, label_masks in tqdm(list(batcher(*data['train'], shuffle=True, batch_size=16))):
             optimizer.zero_grad()
-            bert_output = encoder.encode_tokens(torch.tensor(examples).cuda())
-            classifier_log_odds = classifier(bert_output)
+            classifier_log_odds = model(torch.tensor(examples).cuda())
 
             reshaped_output = classifier_log_odds.reshape((-1, classifier_log_odds.shape[-1]))
             reshaped_labels = torch.tensor(labels).cuda().reshape((-1,))
             reshaped_label_mask = torch.tensor(label_masks).cuda().reshape((-1,)).float()
-
 
             full_loss = loss(reshaped_output, reshaped_labels)
             masked_loss = full_loss * reshaped_label_mask
@@ -155,7 +161,7 @@ def main():
         train_time = time.time() - start
 
         eval_start = time.time()
-        f1 = evaluate(Path('output'), bert_model, classifier, data['dev'])
+        f1 = evaluate(Path('output'), model, data['dev'])
         eval_time = time.time() - eval_start
         if f1 > best_f1:
             best_f1 = f1
@@ -164,4 +170,5 @@ def main():
         logger.info(f'Epoch: {epoch} Dev F1: {f1:0.04f} Training Loss: {epoch_loss / n_batches:0.04f} Duration: {train_time:0.1f} sec Eval duration: {eval_time:0.1f} sec')
 
 if __name__ == '__main__':
-    main()
+    args = get_args()
+    main(args.pretrained_model, args.model_type, args.fine_tune)
