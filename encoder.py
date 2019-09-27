@@ -1,15 +1,24 @@
+import os
+from os import path
+
+os.environ["TORCH_HOME"] = (
+    "/share/data/speech/hackathon_2019/.cache/torch"
+)
+
 import torch
 import torch.nn as nn
 import logging
 
-from transformers import *
+from transformers import BertModel, RobertaModel, GPT2Model
+from transformers import BertTokenizer, RobertaTokenizer, GPT2Tokenizer
+from transformers import BertConfig
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
-MODEL_LIST = ['bert', 'roberta', 'gpt2']
-# MODEL_LIST = ['bert', 'spanbert', ''roberta', 'gpt2']
+MODEL_LIST = ['bert', 'spanbert', 'roberta', 'gpt2']
 BERT_MODEL_SIZES = ['base', 'large']
 GPT2_MODEL_SIZES = ['', 'medium', 'large']
+SPANBERT_PATH = "/share/data/speech/hackathon_2019/spanbert_models"
 
 
 class Encoder(nn.Module):
@@ -39,16 +48,24 @@ class Encoder(nn.Module):
             else:
                 model_name += '-cased'
 
-            print (model_name)
             if model == 'bert':
-                self.model = BertModel.from_pretrained(model_name,
-                    output_hidden_states=True)
+                self.model = BertModel.from_pretrained(
+                    model_name, output_hidden_states=True)
                 self.tokenizer = BertTokenizer.from_pretrained(model_name)
             elif model == 'roberta':
-                self.model = RobertaModel.from_pretrained(model_name,
-                    output_hidden_states=True)
+                self.model = RobertaModel.from_pretrained(
+                    model_name, output_hidden_states=True)
                 self.tokenizer = RobertaTokenizer.from_pretrained(model_name)
-            # elif model == 'spanbert':
+            elif model == 'spanbert':
+                base_path = path.join(SPANBERT_PATH, model_type)
+                config = BertConfig.from_json_file(
+                    path.join(base_path, "config.json"))
+                config.output_hidden_states = True
+                self.model = BertModel.from_pretrained(
+                    base_path, config=config)
+                # Remove "span" prefix from model name to use BERT's tokenizer
+                self.tokenizer = BertTokenizer.from_pretrained(
+                    model_name[4:])
 
             self.num_layers = self.model.config.num_hidden_layers
             self.hidden_size = self.model.config.hidden_size
@@ -59,7 +76,8 @@ class Encoder(nn.Module):
             if model_type:
                 model_name += "-" + model_type
 
-            self.model = GPT2Model.from_pretrained(model_name, output_hidden_states=True)
+            self.model = GPT2Model.from_pretrained(
+                model_name, output_hidden_states=True)
             self.tokenizer = GPT2Tokenizer.from_pretrained(model_name)
             self.num_layers = self.model.config.n_layer
             self.hidden_size = self.model.config.n_embd
@@ -75,12 +93,12 @@ class Encoder(nn.Module):
         # Attention-based Span representation parameters - MIGHT NOT BE USED
         self.attention_weight = nn.Parameter(torch.ones(self.hidden_size))
 
-
     def tokenize_input(self, sentence, max_length=512):
         """
         sentence: a whole string containing all the tokens (NOT A LIST).
         """
-        return torch.tensor(self.tokenizer.encode(sentence, max_length=max_length,
+        return torch.tensor(self.tokenizer.encode(
+            sentence, max_length=max_length,
             add_special_tokens=True)).unsqueeze(dim=0).cuda()
 
     def encode_tokens(self, batch_ids):
@@ -110,7 +128,8 @@ class Encoder(nn.Module):
         start_idx: integer
         end_idx: integer
         """
-        span_repr = encoded_input[:, end_idx, :] - encoded_input[:, start_idx, :]
+        span_repr = (encoded_input[:, end_idx, :]
+                     - encoded_input[:, start_idx, :])
         return span_repr
 
     def span_avg(self, encoded_input, start_idx, end_idx):
@@ -122,7 +141,7 @@ class Encoder(nn.Module):
         return span_repr
 
 
-if __name__=='__main__':
-    model = Encoder(model='gpt2', model_type='').cuda()
+if __name__ == '__main__':
+    model = Encoder(model='bert', model_type='large').cuda()
     tokenized_input = model.tokenize_input("Hello world!")  # 1 x L
     model.encode_tokens(tokenized_input).shape
