@@ -9,11 +9,13 @@ import torch
 import torch.nn as nn
 import logging
 
+logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
+
+
 from transformers import BertModel, RobertaModel, GPT2Model
 from transformers import BertTokenizer, RobertaTokenizer, GPT2Tokenizer
 from transformers import BertConfig
 
-logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 MODEL_LIST = ['bert', 'spanbert', 'roberta', 'gpt2']
 BERT_MODEL_SIZES = ['base', 'large']
@@ -34,6 +36,8 @@ class Encoder(nn.Module):
 
         # First initialize the model and tokenizer
         model_name = ''
+        # Do we want the tokenizer to lower case or not
+        do_lower_case = not cased
         # Model is one of the BERT variants
         if 'bert' in model:
             assert (model_type in BERT_MODEL_SIZES)
@@ -51,11 +55,13 @@ class Encoder(nn.Module):
             if model == 'bert':
                 self.model = BertModel.from_pretrained(
                     model_name, output_hidden_states=True)
-                self.tokenizer = BertTokenizer.from_pretrained(model_name)
+                self.tokenizer = BertTokenizer.from_pretrained(
+                    model_name, do_lower_case=do_lower_case)
             elif model == 'roberta':
                 self.model = RobertaModel.from_pretrained(
                     model_name, output_hidden_states=True)
-                self.tokenizer = RobertaTokenizer.from_pretrained(model_name)
+                self.tokenizer = RobertaTokenizer.from_pretrained(
+                    model_name, do_lower_case=do_lower_case)
             elif model == 'spanbert':
                 base_path = path.join(SPANBERT_PATH, model_type)
                 config = BertConfig.from_json_file(
@@ -65,7 +71,7 @@ class Encoder(nn.Module):
                     base_path, config=config)
                 # Remove "span" prefix from model name to use BERT's tokenizer
                 self.tokenizer = BertTokenizer.from_pretrained(
-                    model_name[4:])
+                    model_name[4:], do_lower_case=do_lower_case)
 
             self.num_layers = self.model.config.num_hidden_layers
             self.hidden_size = self.model.config.hidden_size
@@ -78,9 +84,13 @@ class Encoder(nn.Module):
 
             self.model = GPT2Model.from_pretrained(
                 model_name, output_hidden_states=True)
-            self.tokenizer = GPT2Tokenizer.from_pretrained(model_name)
+            self.tokenizer = GPT2Tokenizer.from_pretrained(
+                model_name, do_lower_case=do_lower_case)
             self.num_layers = self.model.config.n_layer
             self.hidden_size = self.model.config.n_embd
+
+        # Set the model name
+        self.model_name = model_name
 
         # Set requires_grad to False if not fine tuning
         if not fine_tune:
@@ -93,13 +103,77 @@ class Encoder(nn.Module):
         # Attention-based Span representation parameters - MIGHT NOT BE USED
         self.attention_weight = nn.Parameter(torch.ones(self.hidden_size))
 
-    def tokenize_input(self, sentence, max_length=512):
+    def tokenize_sentence(self, sentence, max_length=512):
+        tokenizer = self.tokenizer
+        if 'bert' in self.model_name:
+            # Check if the sentence is a list of words or a string
+            if type(sentence) is list:
+                # If list then don't do anything
+                pass
+            else:
+                # Perform basic tokenization to get list of
+                sentence = tokenizer.basic_tokenizer.tokenize(sentence)
+
+            assert (len(sentence) > 0)
+            # Now the sentence is a list of words
+            first_subword_idx_list = []
+            token_ids = []
+            for word_idx, word in enumerate(sentence):
+                subword_list = tokenizer.wordpiece_tokenizer.tokenize(word)
+                subword_ids = [
+                    tokenizer._convert_token_to_id(subword)
+                    for subword in subword_list
+                ]
+
+                first_subword_idx_list.append(len(token_ids))
+                token_ids += subword_ids
+
+            final_token_ids = tokenizer.add_special_tokens_single_sequence(
+                token_ids)
+
+            # Search for the token id corresponding to first subword
+            # token in original text
+            token_shift = final_token_ids.index(token_ids[0])
+            first_subword_idx_list = [
+                (token_shift + first_subword_idx)
+                for first_subword_idx in first_subword_idx_list
+            ]
+            return final_token_ids, first_subword_idx_list
+        else:
+            assert(isinstance(sentence, str))
+            return tokenizer.encode(sentence, add_special_tokens=True)
+
+    def tokenize_batch(self, list_of_sentences):
         """
         sentence: a whole string containing all the tokens (NOT A LIST).
         """
-        return torch.tensor(self.tokenizer.encode(
-            sentence, max_length=max_length,
-            add_special_tokens=True)).unsqueeze(dim=0).cuda()
+        all_token_ids = []
+        all_first_subword_idx_list = []
+
+        sentence_len_list = []
+        max_sentence_len = 0
+        for sentence in list_of_sentences:
+            if 'bert' in self.model_name:
+                token_ids, first_subword_idx_list = \
+                    self.tokenize_sentence(sentence)
+                all_first_subword_idx_list.append(first_subword_idx_list)
+            else:
+                token_ids = self.tokenize_sentence(sentence)
+
+            all_token_ids.append(token_ids)
+            sentence_len_list.append(len(token_ids))
+            if max_sentence_len < sentence_len_list[-1]:
+                max_sentence_len = sentence_len_list[-1]
+
+        # Pad the sentences to max length
+        all_token_ids = [
+            (token_ids + (max_sentence_len - len(token_ids)) * [self.tokenizer.pad_token_id])
+            for token_ids in all_token_ids
+        ]
+
+        # Tensorize the list
+        batch_token_ids = torch.tensor(all_token_ids).cuda()
+        return batch_token_ids, all_first_subword_idx_list
 
     def encode_tokens(self, batch_ids, just_last_layer=False):
         """
@@ -144,11 +218,13 @@ class Encoder(nn.Module):
 
 
 if __name__ == '__main__':
-    for model in MODEL_LIST:
-        for model_type in BERT_MODEL_SIZES + GPT2_MODEL_SIZES:
-            try:
-                model = Encoder(model=model, model_type=model_type)
-                tokenized_input = model.tokenize_input("Hello world!")  # 1 x L
-                model.encode_tokens(tokenized_input).shape
-            except:
-                pass
+    model = Encoder(model='spanbert', model_type='base').cuda()
+    tokenized_input, useful_list = model.tokenize_batch(
+        ["Hello unforgiving world!", "What's up"])  # 1 x L
+    print(tokenized_input)
+    print(tokenized_input.shape)
+    print(model.encode_tokens(tokenized_input).shape)
+    print(useful_list)
+    for idx in range(tokenized_input.shape[0]):
+        print(model.tokenizer.convert_ids_to_tokens(
+            tokenized_input[idx, :].tolist()))
