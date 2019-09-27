@@ -20,7 +20,10 @@ from transformers import BertConfig
 MODEL_LIST = ['bert', 'spanbert', 'roberta', 'gpt2']
 BERT_MODEL_SIZES = ['base', 'large']
 GPT2_MODEL_SIZES = ['', 'medium', 'large']
-SPANBERT_PATH = "/share/data/speech/hackathon_2019/spanbert_models"
+SPANBERT_URL= {
+    "base": "https://dl.fbaipublicfiles.com/fairseq/models/spanbert_hf_base.tar.gz",
+    "large": "https://dl.fbaipublicfiles.com/fairseq/models/spanbert_hf.tar.gz"
+}
 
 
 class Encoder(nn.Module):
@@ -68,7 +71,7 @@ class Encoder(nn.Module):
                     path.join(base_path, "config.json"))
                 config.output_hidden_states = True
                 self.model = BertModel.from_pretrained(
-                    base_path, config=config)
+                    SPANBERT_URL[model_type], config=config)
                 # Remove "span" prefix from model name to use BERT's tokenizer
                 self.tokenizer = BertTokenizer.from_pretrained(
                     model_name[4:], do_lower_case=do_lower_case)
