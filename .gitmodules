@@ -1,6 +1,3 @@
 [submodule "encoders/diora"]
 	path = encoders/diora
 	url = https://github.com/ExplorerFreda/diora
-[submodule "encoders/transformers/SpanBERT"]
-	path = encoders/transformers/SpanBERT
-	url = https://github.com/facebookresearch/SpanBERT

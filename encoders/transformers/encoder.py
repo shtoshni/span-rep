@@ -136,9 +136,9 @@ class Encoder(nn.Module):
             return final_token_ids, first_subword_idx_list
         else:
             assert(isinstance(sentence, str))
-            return tokenizer.encode(sentence, add_special_tokens=True)
+            return tokenizer.encode(sentence, add_special_tokens=True), []
 
-    def tokenize_batch(self, list_of_sentences):
+    def tokenize_batch(self, list_of_sentences, get_subword_indices=False):
         """
         sentence: a whole string containing all the tokens (NOT A LIST).
         """
@@ -148,12 +148,10 @@ class Encoder(nn.Module):
         sentence_len_list = []
         max_sentence_len = 0
         for sentence in list_of_sentences:
-            if 'bert' in self.model_name:
-                token_ids, first_subword_idx_list = \
-                    self.tokenize(sentence)
-                all_first_subword_idx_list.append(first_subword_idx_list)
-            else:
-                token_ids = self.tokenize(sentence)
+            # first_subword_idx_list is empty for GPT2
+            token_ids, first_subword_idx_list = \
+                self.tokenize(sentence)
+            all_first_subword_idx_list.append(first_subword_idx_list)
 
             all_token_ids.append(token_ids)
             sentence_len_list.append(len(token_ids))
@@ -167,8 +165,12 @@ class Encoder(nn.Module):
         ]
 
         # Tensorize the list
-        batch_token_ids = torch.tensor(all_token_ids).cuda()
-        return batch_token_ids, all_first_subword_idx_list
+        batch_token_ids = torch.tensor(all_token_ids)
+        batch_lens = torch.tensor(sentence_len_list)
+        if get_subword_indices:
+            return (batch_token_ids, batch_lens, all_first_subword_idx_list)
+        else:
+            return (batch_token_ids, batch_lens)
 
     def forward(self, batch_ids, just_last_layer=False):
         """
