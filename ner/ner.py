@@ -130,7 +130,7 @@ def main(pretrained_model, model_type, fine_tune):
     tokenizer = model.tokenizer
 
     data = load_data(Path('data'), tokenizer=tokenizer, bio=True)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
     loss = torch.nn.CrossEntropyLoss(reduction='none')
 
@@ -141,7 +141,7 @@ def main(pretrained_model, model_type, fine_tune):
         epoch_loss = 0
         n_batches = 0
 
-        for examples, masks, labels, label_masks in tqdm(list(batcher(*data['train'], shuffle=True, batch_size=16))):
+        for examples, masks, labels, label_masks in tqdm(list(batcher(*data['train'], shuffle=True, batch_size=32))[:200]):
             optimizer.zero_grad()
             classifier_log_odds = model(torch.tensor(examples).cuda())
 

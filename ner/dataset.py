@@ -158,7 +158,7 @@ def load_data(path : Path, truncate=None, bio=False, tokenizer=None):
         labels = []
         label_masks = []
 
-        sent = ['[CLS]']
+        sent = []
         sent_labels = []
         label_mask = []
         print(f'Loading fold: {fold}')
@@ -167,15 +167,15 @@ def load_data(path : Path, truncate=None, bio=False, tokenizer=None):
                 line = line.strip()
                 if not line:
                     if sent and len(sent) > 1:
-                        sent.append('[SEP]')
-                        examples.append(tokenizer.convert_tokens_to_ids(sent))
+                        examples.append(tokenizer.add_special_tokens_single_sequence(
+                            tokenizer.convert_tokens_to_ids(sent)))
                         if bio:
                             sent_labels = bioes_ids_to_bio(sent_labels)
                         labels.append(sent_labels)
                         label_masks.append(label_mask)
                         if truncate and len(examples) == truncate:
                             break
-                    sent = ['[CLS]']
+                    sent = []
                     sent_labels = []
                     label_mask = []
                     continue

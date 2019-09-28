@@ -1,26 +1,25 @@
 import os
 from os import path
-
-os.environ["TORCH_HOME"] = (
-    "/share/data/speech/hackathon_2019/.cache/torch"
-)
+#
+# os.environ["TORCH_HOME"] = (
+#     "/share/data/speech/hackathon_2019/.cache/torch"
+# )
 
 import torch
 import torch.nn as nn
 import logging
-
-logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
-
+import SpanBERT
 
 from transformers import BertModel, RobertaModel, GPT2Model
 from transformers import BertTokenizer, RobertaTokenizer, GPT2Tokenizer
-from transformers import BertConfig
+
+
+logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
 
 MODEL_LIST = ['bert', 'spanbert', 'roberta', 'gpt2']
 BERT_MODEL_SIZES = ['base', 'large']
 GPT2_MODEL_SIZES = ['', 'medium', 'large']
-SPANBERT_PATH = "/share/data/speech/hackathon_2019/spanbert_models"
 
 
 class Encoder(nn.Module):
@@ -63,13 +62,13 @@ class Encoder(nn.Module):
                 self.tokenizer = RobertaTokenizer.from_pretrained(
                     model_name, do_lower_case=do_lower_case)
             elif model == 'spanbert':
-                base_path = path.join(SPANBERT_PATH, model_type)
-                config = BertConfig.from_json_file(
-                    path.join(base_path, "config.json"))
-                config.output_hidden_states = True
-                self.model = BertModel.from_pretrained(
-                    base_path, config=config)
-                # Remove "span" prefix from model name to use BERT's tokenizer
+                # Model is loaded in a different way
+                # Earlier "pytorch_transformers" required a .tar.gz URL/file
+                # Updated library "transformers" requires pytorch_model.bin
+                # and config.json separately.
+                self.model = SpanBERT.BertModel.from_pretrained(
+                    model_name)
+                # SpanBERT uses the same tokenizer as BERT
                 self.tokenizer = BertTokenizer.from_pretrained(
                     model_name[4:], do_lower_case=do_lower_case)
 
@@ -103,7 +102,7 @@ class Encoder(nn.Module):
         # Attention-based Span representation parameters - MIGHT NOT BE USED
         self.attention_weight = nn.Parameter(torch.ones(self.hidden_size))
 
-    def tokenize_sentence(self, sentence, max_length=512):
+    def tokenize(self, sentence, max_length=512):
         tokenizer = self.tokenizer
         if 'bert' in self.model_name:
             # Check if the sentence is a list of words or a string
@@ -155,10 +154,10 @@ class Encoder(nn.Module):
         for sentence in list_of_sentences:
             if 'bert' in self.model_name:
                 token_ids, first_subword_idx_list = \
-                    self.tokenize_sentence(sentence)
+                    self.tokenize(sentence)
                 all_first_subword_idx_list.append(first_subword_idx_list)
             else:
-                token_ids = self.tokenize_sentence(sentence)
+                token_ids = self.tokenize(sentence)
 
             all_token_ids.append(token_ids)
             sentence_len_list.append(len(token_ids))
@@ -175,20 +174,26 @@ class Encoder(nn.Module):
         batch_token_ids = torch.tensor(all_token_ids).cuda()
         return batch_token_ids, all_first_subword_idx_list
 
-    def encode_tokens(self, batch_ids, just_last_layer=False):
+    def forward(self, batch_ids, just_last_layer=False):
         """
-        Encode a batch of token IDs with a learned
+        Encode a batch of token IDs.
         batch_ids: B x L
         """
-        input_mask = (batch_ids > 0).cuda().float()
-        last_hidden_states, _,  encoded_layers = self.model(
-            batch_ids, attention_mask=input_mask)  # B x L x E
-
-        if just_last_layer:
-            return last_hidden_states
+        input_mask = (batch_ids != self.tokenizer.pad_token_id).cuda().float()
+        if 'spanbert' in self.model_name:
+            # SpanBERT is based on old APIs
+            encoded_layers, _ = self.model(
+                batch_ids, attention_mask=input_mask)
+            last_layer_states = encoded_layers[-1]
         else:
+            last_layer_states, _,  encoded_layers = self.model(
+                batch_ids, attention_mask=input_mask)  # B x L x E
             # Encoded layers also has the embedding layer - 0th entry
             encoded_layers = encoded_layers[1:]
+
+        if just_last_layer:
+            return last_layer_states
+        else:
 
             wtd_encoded_repr = 0
             soft_weight = nn.functional.softmax(self.weighing_params, dim=0)
@@ -223,7 +228,7 @@ if __name__ == '__main__':
         ["Hello unforgiving world!", "What's up"])  # 1 x L
     print(tokenized_input)
     print(tokenized_input.shape)
-    print(model.encode_tokens(tokenized_input).shape)
+    print(model(tokenized_input).shape)
     print(useful_list)
     for idx in range(tokenized_input.shape[0]):
         print(model.tokenizer.convert_ids_to_tokens(
