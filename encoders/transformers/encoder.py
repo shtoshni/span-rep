@@ -1,9 +1,5 @@
 import os
 from os import path
-#
-# os.environ["TORCH_HOME"] = (
-#     "/share/data/speech/hackathon_2019/.cache/torch"
-# )
 
 import torch
 import torch.nn as nn
