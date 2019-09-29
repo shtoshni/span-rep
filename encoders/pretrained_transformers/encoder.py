@@ -101,7 +101,7 @@ class Encoder(nn.Module):
         # Attention-based Span representation parameters - MIGHT NOT BE USED
         self.attention_weight = nn.Parameter(torch.ones(self.hidden_size))
 
-    def tokenize(self, sentence, max_length=512, get_subword_indices=False):
+    def tokenize(self, sentence, get_subword_indices=False):
         tokenizer = self.tokenizer
         subword_to_word_idx = []
 
@@ -141,6 +141,15 @@ class Encoder(nn.Module):
         else:
             raise Exception("%s doesn't support getting word indices"
                             % self.base_name)
+
+    def tokenize_sentence(self, sentence, get_subword_indices=False):
+        output = self.tokenize(
+            sentence, get_subword_indices=get_subword_indices)
+        if get_subword_indices:
+            return (torch.tensor(output[0]).unsqueeze(dim=0),
+                    torch.tensor(output[1]).unsqueeze(dim=0))
+        else:
+            return torch.tensor(output).unsqueeze(dim=0)
 
     def tokenize_batch(self, list_of_sentences, get_subword_indices=False):
         """
