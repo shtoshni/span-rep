@@ -18,11 +18,11 @@ logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
 MODEL_LIST = ['bert', 'spanbert', 'roberta', 'gpt2']
 BERT_MODEL_SIZES = ['base', 'large']
-GPT2_MODEL_SIZES = ['', 'medium', 'large']
+GPT2_MODEL_SIZES = ['small', 'medium', 'large']
 
 
 class Encoder(nn.Module):
-    def __init__(self, model='bert', model_type='base', cased=True,
+    def __init__(self, model='bert', model_size='base', cased=True,
                  fine_tune=False):
         super(Encoder, self).__init__()
         assert(model in MODEL_LIST)
@@ -39,8 +39,8 @@ class Encoder(nn.Module):
         do_lower_case = not cased
         # Model is one of the BERT variants
         if 'bert' in model:
-            assert (model_type in BERT_MODEL_SIZES)
-            model_name = model + "-" + model_type
+            assert (model_size in BERT_MODEL_SIZES)
+            model_name = model + "-" + model_size
             if model == 'bert' and not cased:
                 # Only original BERT supports uncased models
                 model_name += '-uncased'
@@ -76,10 +76,10 @@ class Encoder(nn.Module):
             self.hidden_size = self.model.config.hidden_size
 
         elif model == 'gpt2':
-            assert (model_type in GPT2_MODEL_SIZES)
+            assert (model_size in GPT2_MODEL_SIZES)
             model_name = model
-            if model_type:
-                model_name += "-" + model_type
+            if model_size != "small":
+                model_name += "-" + model_size
 
             self.model = GPT2Model.from_pretrained(
                 model_name, output_hidden_states=True)
@@ -110,7 +110,10 @@ class Encoder(nn.Module):
             # Operate directly on a string
             if type(sentence) is list:
                 sentence = ' '.join(sentence)
-            token_ids = tokenizer.encode(sentence, add_special_tokens=True)
+            token_ids = tokenizer.encode(
+                sentence, add_special_tokens=(
+                    False if self.base_name == 'gpt2' else True)
+                )
             return token_ids
 
         elif get_subword_indices and self.base_name in ['bert', 'spanbert']:
@@ -175,8 +178,10 @@ class Encoder(nn.Module):
                 max_sentence_len = sentence_len_list[-1]
 
         # Pad the sentences to max length
+        pad_token = (self.tokenizer.eos_token_id if self.base_name == 'gpt2'
+                     else self.tokenizer.pad_token_id)
         all_token_ids = [
-            (token_ids + (max_sentence_len - len(token_ids)) * [self.tokenizer.pad_token_id])
+            (token_ids + (max_sentence_len - len(token_ids)) * [pad_token])
             for token_ids in all_token_ids
         ]
 
@@ -201,7 +206,9 @@ class Encoder(nn.Module):
         Encode a batch of token IDs.
         batch_ids: B x L
         """
-        input_mask = (batch_ids != self.tokenizer.pad_token_id).cuda().float()
+        pad_token = (self.tokenizer.eos_token_id if self.base_name == 'gpt2'
+                     else self.tokenizer.pad_token_id)
+        input_mask = (batch_ids != pad_token).cuda().float()
         if 'spanbert' in self.model_name:
             # SpanBERT is based on old APIs
             encoded_layers, _ = self.model(
@@ -227,16 +234,13 @@ class Encoder(nn.Module):
 
 
 if __name__ == '__main__':
-    model = Encoder(model='spanbert', model_type='base').cuda()
-    tokenized_input, input_lengths, subword_to_idx = model.tokenize_batch(
-        ["Hello unforgiving world!", "What's up"], get_subword_indices=True)  # 1 x L
-    print(tokenized_input)
-    print(tokenized_input.shape)
+    model = Encoder(model='gpt2', model_size='small').cuda()
+    tokenized_input, input_lengths = model.tokenize_batch(
+        ["Hello unforgiving world!", "What's up"], get_subword_indices=False)
     output = model(tokenized_input)
+
     for idx in range(tokenized_input.shape[0]):
         print(model.tokenizer.convert_ids_to_tokens(
             tokenized_input[idx, :].tolist()))
-    print(get_avg_repr(output, 1, 3).shape)
+    print(get_avg_repr(output, 0, 2).shape)
     print(get_diff_repr(output, 1, 3).shape)
-    print(get_max_pooling_repr(output, 1, 3).shape)
-    print(get_alternate_repr(output, 1, 3).shape)
