@@ -6,11 +6,12 @@ import torch
 import torch.nn as nn
 import logging
 
-from SpanBERT import BertModel as SpanbertModel
-
 from transformers import BertModel, RobertaModel, GPT2Model
 from transformers import BertTokenizer, RobertaTokenizer, GPT2Tokenizer
 
+from SpanBERT import BertModel as SpanbertModel
+from span_reprs import get_avg_repr, get_diff_repr, \
+    get_max_pooling_repr, get_alternate_repr
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
@@ -146,10 +147,10 @@ class Encoder(nn.Module):
         output = self.tokenize(
             sentence, get_subword_indices=get_subword_indices)
         if get_subword_indices:
-            return (torch.tensor(output[0]).unsqueeze(dim=0),
-                    torch.tensor(output[1]).unsqueeze(dim=0))
+            return (torch.tensor(output[0]).unsqueeze(dim=0).cuda(),
+                    torch.tensor(output[1]).unsqueeze(dim=0).cuda())
         else:
-            return torch.tensor(output).unsqueeze(dim=0)
+            return torch.tensor(output).unsqueeze(dim=0).cuda()
 
     def tokenize_batch(self, list_of_sentences, get_subword_indices=False):
         """
@@ -188,8 +189,7 @@ class Encoder(nn.Module):
         # Tensorize the list
         batch_token_ids = torch.tensor(all_token_ids)
         batch_lens = torch.tensor(sentence_len_list)
-        if torch.cuda.is_available():
-            batch_token_ids, batch_lens = batch_token_ids.cuda(), batch_lens.cuda()
+        batch_token_ids, batch_lens = batch_token_ids.cuda(), batch_lens.cuda()
         if get_subword_indices:
             return (batch_token_ids, batch_lens,
                     torch.tensor(all_subword_to_word_idx))
@@ -201,9 +201,7 @@ class Encoder(nn.Module):
         Encode a batch of token IDs.
         batch_ids: B x L
         """
-        input_mask = (batch_ids != self.tokenizer.pad_token_id).float()
-        if torch.cuda.is_available():
-            input_mask = input_mask.cuda()
+        input_mask = (batch_ids != self.tokenizer.pad_token_id).cuda().float()
         if 'spanbert' in self.model_name:
             # SpanBERT is based on old APIs
             encoded_layers, _ = self.model(
@@ -227,24 +225,6 @@ class Encoder(nn.Module):
 
             return wtd_encoded_repr
 
-    def span_diff(self, encoded_input, start_idx, end_idx):
-        """Does the difference based span representation: h_j - h_i
-        encoded_input: B x L x H
-        start_idx: integer
-        end_idx: integer
-        """
-        span_repr = (encoded_input[:, end_idx, :]
-                     - encoded_input[:, start_idx, :])
-        return span_repr
-
-    def span_avg(self, encoded_input, start_idx, end_idx):
-        span_repr = 0
-        span_length = (end_idx - start_idx + 1)
-        assert(span_length > 0)
-        for idx in range(start_idx, end_idx + 1):
-            span_repr += encoded_input[:, idx, :]/span_length
-        return span_repr
-
 
 if __name__ == '__main__':
     model = Encoder(model='spanbert', model_type='base').cuda()
@@ -256,4 +236,7 @@ if __name__ == '__main__':
     for idx in range(tokenized_input.shape[0]):
         print(model.tokenizer.convert_ids_to_tokens(
             tokenized_input[idx, :].tolist()))
-    print(model.span_diff(output, 1, 3).shape)
+    print(get_avg_repr(output, 1, 3).shape)
+    print(get_diff_repr(output, 1, 3).shape)
+    print(get_max_pooling_repr(output, 1, 3).shape)
+    print(get_alternate_repr(output, 1, 3).shape)
