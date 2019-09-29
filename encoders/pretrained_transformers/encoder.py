@@ -1,10 +1,12 @@
 import os
 from os import path
+import sys
 
 import torch
 import torch.nn as nn
 import logging
-import SpanBERT
+
+from SpanBERT import BertModel as SpanbertModel
 
 from transformers import BertModel, RobertaModel, GPT2Model
 from transformers import BertTokenizer, RobertaTokenizer, GPT2Tokenizer
@@ -24,6 +26,7 @@ class Encoder(nn.Module):
         super(Encoder, self).__init__()
         assert(model in MODEL_LIST)
 
+        self.base_name = model
         self.model = None
         self.tokenizer = None
         self.num_layers = None
@@ -62,7 +65,7 @@ class Encoder(nn.Module):
                 # Earlier "pytorch_transformers" required a .tar.gz URL/file
                 # Updated library "transformers" requires pytorch_model.bin
                 # and config.json separately.
-                self.model = SpanBERT.BertModel.from_pretrained(
+                self.model = SpanbertModel.from_pretrained(
                     model_name)
                 # SpanBERT uses the same tokenizer as BERT
                 self.tokenizer = BertTokenizer.from_pretrained(
@@ -98,60 +101,63 @@ class Encoder(nn.Module):
         # Attention-based Span representation parameters - MIGHT NOT BE USED
         self.attention_weight = nn.Parameter(torch.ones(self.hidden_size))
 
-    def tokenize(self, sentence, max_length=512):
+    def tokenize(self, sentence, max_length=512, get_subword_indices=False):
         tokenizer = self.tokenizer
-        if 'bert' in self.model_name:
-            # Check if the sentence is a list of words or a string
+        subword_to_word_idx = []
+
+        if not get_subword_indices:
+            # Operate directly on a string
+            if type(sentence) is list:
+                sentence = ' '.join(sentence)
+            token_ids = tokenizer.encode(sentence, add_special_tokens=True)
+            return token_ids
+
+        elif get_subword_indices and self.base_name in ['bert', 'spanbert']:
+            # We check for model name since Roberta/GPT2 don't operate at
+            # word level
+
+            # Convert sentence to a list of words
             if type(sentence) is list:
                 # If list then don't do anything
                 pass
             else:
-                # Perform basic tokenization to get list of
+                # Perform basic tokenization to get list of words
                 sentence = tokenizer.basic_tokenizer.tokenize(sentence)
 
-            assert (len(sentence) > 0)
-            # Now the sentence is a list of words
-            first_subword_idx_list = []
             token_ids = []
             for word_idx, word in enumerate(sentence):
                 subword_list = tokenizer.wordpiece_tokenizer.tokenize(word)
-                subword_ids = [
-                    tokenizer._convert_token_to_id(subword)
-                    for subword in subword_list
-                ]
+                subword_ids = tokenizer.convert_tokens_to_ids(subword_list)
 
-                first_subword_idx_list.append(len(token_ids))
+                subword_to_word_idx += [word_idx] * len(subword_ids)
                 token_ids += subword_ids
 
             final_token_ids = tokenizer.add_special_tokens_single_sequence(
                 token_ids)
 
-            # Search for the token id corresponding to first subword
-            # token in original text
-            token_shift = final_token_ids.index(token_ids[0])
-            first_subword_idx_list = [
-                (token_shift + first_subword_idx)
-                for first_subword_idx in first_subword_idx_list
-            ]
-            return final_token_ids, first_subword_idx_list
+            # Add -1 to denote the special symbols
+            subword_to_word_idx = ([-1] + subword_to_word_idx + [-1])
+            return final_token_ids, subword_to_word_idx
         else:
-            assert(isinstance(sentence, str))
-            return tokenizer.encode(sentence, add_special_tokens=True), []
+            raise Exception("%s doesn't support getting word indices"
+                            % self.base_name)
 
     def tokenize_batch(self, list_of_sentences, get_subword_indices=False):
         """
         sentence: a whole string containing all the tokens (NOT A LIST).
         """
         all_token_ids = []
-        all_first_subword_idx_list = []
+        all_subword_to_word_idx = []
 
         sentence_len_list = []
         max_sentence_len = 0
         for sentence in list_of_sentences:
-            # first_subword_idx_list is empty for GPT2
-            token_ids, first_subword_idx_list = \
-                self.tokenize(sentence)
-            all_first_subword_idx_list.append(first_subword_idx_list)
+            if get_subword_indices:
+                token_ids, subword_to_word_idx = \
+                    self.tokenize(sentence, get_subword_indices=True)
+                all_subword_to_word_idx.append(subword_to_word_idx)
+            else:
+                token_ids = self.tokenize(sentence)
 
             all_token_ids.append(token_ids)
             sentence_len_list.append(len(token_ids))
@@ -164,11 +170,20 @@ class Encoder(nn.Module):
             for token_ids in all_token_ids
         ]
 
+        if get_subword_indices:
+            all_subword_to_word_idx = [
+                (word_indices + (max_sentence_len - len(word_indices)) * [-1])
+                for word_indices in all_subword_to_word_idx
+            ]
+
         # Tensorize the list
         batch_token_ids = torch.tensor(all_token_ids)
         batch_lens = torch.tensor(sentence_len_list)
+        if torch.cuda.is_available():
+            batch_token_ids, batch_lens = batch_token_ids.cuda(), batch_lens.cuda()
         if get_subword_indices:
-            return (batch_token_ids, batch_lens, all_first_subword_idx_list)
+            return (batch_token_ids, batch_lens,
+                    torch.tensor(all_subword_to_word_idx))
         else:
             return (batch_token_ids, batch_lens)
 
@@ -177,7 +192,9 @@ class Encoder(nn.Module):
         Encode a batch of token IDs.
         batch_ids: B x L
         """
-        input_mask = (batch_ids != self.tokenizer.pad_token_id).cuda().float()
+        input_mask = (batch_ids != self.tokenizer.pad_token_id).float()
+        if torch.cuda.is_available():
+            input_mask = input_mask.cuda()
         if 'spanbert' in self.model_name:
             # SpanBERT is based on old APIs
             encoded_layers, _ = self.model(
@@ -222,12 +239,12 @@ class Encoder(nn.Module):
 
 if __name__ == '__main__':
     model = Encoder(model='spanbert', model_type='base').cuda()
-    tokenized_input, useful_list = model.tokenize_batch(
-        ["Hello unforgiving world!", "What's up"])  # 1 x L
+    tokenized_input, input_lengths, subword_to_idx = model.tokenize_batch(
+        ["Hello unforgiving world!", "What's up"], get_subword_indices=True)  # 1 x L
     print(tokenized_input)
     print(tokenized_input.shape)
-    print(model(tokenized_input).shape)
-    print(useful_list)
+    output = model(tokenized_input)
     for idx in range(tokenized_input.shape[0]):
         print(model.tokenizer.convert_ids_to_tokens(
             tokenized_input[idx, :].tolist()))
+    print(model.span_diff(output, 1, 3).shape)

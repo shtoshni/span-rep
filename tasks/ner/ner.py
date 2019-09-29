@@ -4,9 +4,9 @@ logger = logging.getLogger(__name__)
 
 import sys
 from os import path
-sys.path.append(path.join(sys.path[0], '../'))
 
 from pathlib import Path
+from encoders import Encoder
 import pickle
 import random
 import re
@@ -18,7 +18,6 @@ import torch
 from tqdm import tqdm
 import argparse
 
-from encoder import Encoder
 
 from dataset import load_data, ID_TO_LABEL, MASK_LABEL
 
@@ -49,7 +48,7 @@ class PretrainedModelNER(torch.nn.Module):
             self.encoder.hidden_size, len(ID_TO_LABEL))
 
     def forward(self, batch_indices):
-        model_output = self.encoder.encode_tokens(
+        model_output = self.encoder(
             batch_indices, just_last_layer=True)
         return self.linear(model_output)[:, 1:-1, :]
 
@@ -141,6 +140,7 @@ def main(pretrained_model, model_type, fine_tune):
         epoch_loss = 0
         n_batches = 0
 
+        model.train()
         for examples, masks, labels, label_masks in tqdm(list(batcher(*data['train'], shuffle=True, batch_size=32))[:200]):
             optimizer.zero_grad()
             classifier_log_odds = model(torch.tensor(examples).cuda())
@@ -161,6 +161,7 @@ def main(pretrained_model, model_type, fine_tune):
         train_time = time.time() - start
 
         eval_start = time.time()
+        model.eval()
         f1 = evaluate(Path('output'), model, data['dev'])
         eval_time = time.time() - eval_start
         if f1 > best_f1:
