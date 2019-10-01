@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 import logging
 
-from transformers import BertModel, RobertaModel, GPT2Model
-from transformers import BertTokenizer, RobertaTokenizer, GPT2Tokenizer
+from transformers import BertModel, RobertaModel, GPT2Model, XLNetModel
+from transformers import BertTokenizer, RobertaTokenizer, GPT2Tokenizer, XLNetTokenizer
 
 from SpanBERT import BertModel as SpanbertModel
 from utils import get_sequence_mask
@@ -11,7 +11,7 @@ from utils import get_sequence_mask
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
 # Constants
-MODEL_LIST = ['bert', 'spanbert', 'roberta', 'gpt2']
+MODEL_LIST = ['bert', 'spanbert', 'roberta', 'xlnet', 'gpt2']
 BERT_MODEL_SIZES = ['base', 'large']
 GPT2_MODEL_SIZES = ['small', 'medium', 'large']
 
@@ -74,6 +74,12 @@ class Encoder(nn.Module):
             self.num_layers = self.model.config.num_hidden_layers
             self.hidden_size = self.model.config.hidden_size
 
+        elif model == "xlnet":
+            model_name = model + "-" + model_size + "-cased"
+            self.model = XLNetModel.from_pretrained(model_name, output_hidden_states=True)
+            self.tokenizer = XLNetTokenizer.from_pretrained(model_name, do_lower_case=do_lower_case)
+            self.num_layers = self.model.config.num_hidden_layers
+            self.hidden_size = self.model.config.hidden_size
         elif model == 'gpt2':
             assert (model_size in GPT2_MODEL_SIZES)
             model_name = model
@@ -94,8 +100,12 @@ class Encoder(nn.Module):
         self.model_name = model_name
 
         # Set shift size due to introduction of special tokens
-        self.start_shift = (1 if self.tokenizer._cls_token else 0)
-        self.end_shift = (1 if self.tokenizer._sep_token else 0)
+        if self.base_name == 'xlnet':
+            self.start_shift = 0
+            self.end_shift = 2
+        else:
+            self.start_shift = (1 if self.tokenizer._cls_token else 0)
+            self.end_shift = (1 if self.tokenizer._sep_token else 0)
 
         # Set requires_grad to False if not fine tuning
         if not fine_tune:
@@ -134,10 +144,10 @@ class Encoder(nn.Module):
                     # Basic tokenizer is not a part of Roberta and GPT2
                     sentence = sentence.strip().split()
 
-            if self.base_name in ['bert', 'spanbert']:
+            if self.base_name in ['bert', 'spanbert', 'xlnet']:
                 token_ids = []
                 for word_idx, word in enumerate(sentence):
-                    subword_list = tokenizer.wordpiece_tokenizer.tokenize(word)
+                    subword_list = tokenizer.tokenize(word)
                     subword_ids = tokenizer.convert_tokens_to_ids(subword_list)
 
                     subword_to_word_idx += [word_idx] * len(subword_ids)
@@ -305,15 +315,14 @@ class Encoder(nn.Module):
 
 
 if __name__ == '__main__':
-    model = Encoder(model='bert', model_size='base').cuda()
-    tokenized_input, input_lengths, subword_to_word_ids = model.tokenize_batch(
-        ["Hello unforgiving world!", "What's up"], get_subword_indices=True)
+    model = Encoder(model='xlnet', model_size='base').cuda()
+    tokenized_input, input_lengths = model.tokenize_batch(
+        ["Hello unforgiving world!", "What's up"], get_subword_indices=False)
     output = model(tokenized_input)
 
     for idx in range(tokenized_input.shape[0]):
         print(model.tokenizer.convert_ids_to_tokens(
             tokenized_input[idx, :].tolist()))
-        print(subword_to_word_ids[idx, :].tolist())
 
     for method in ["avg", "max", "diff", "diff_sum", "coherent"]:
         print(method, model.get_sentence_repr(output, input_lengths, method=method).shape)
