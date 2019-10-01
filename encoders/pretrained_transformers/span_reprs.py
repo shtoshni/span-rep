@@ -18,7 +18,7 @@ def get_avg_repr(encoded_input, start_idx, end_idx):
     return span_repr
 
 
-def get_max_pooling_repr(encoded_input, start_idx, end_idx):
+def get_max_repr(encoded_input, start_idx, end_idx):
     return torch.max(encoded_input[:, start_idx:(end_idx + 1), :], dim=1)[0]
 
 

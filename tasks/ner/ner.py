@@ -141,7 +141,7 @@ def main(pretrained_model, model_type, fine_tune):
         n_batches = 0
 
         model.train()
-        for examples, masks, labels, label_masks in tqdm(list(batcher(*data['train'], shuffle=True, batch_size=32))[:200]):
+        for examples, masks, labels, label_masks in tqdm(list(batcher(*data['train'], shuffle=True, batch_size=32))):
             optimizer.zero_grad()
             classifier_log_odds = model(torch.tensor(examples).cuda())
 

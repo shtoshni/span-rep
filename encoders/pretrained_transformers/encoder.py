@@ -1,7 +1,3 @@
-import os
-from os import path
-import sys
-
 import torch
 import torch.nn as nn
 import logging
@@ -10,12 +6,12 @@ from transformers import BertModel, RobertaModel, GPT2Model
 from transformers import BertTokenizer, RobertaTokenizer, GPT2Tokenizer
 
 from SpanBERT import BertModel as SpanbertModel
-from span_reprs import get_avg_repr, get_diff_repr, \
-    get_max_pooling_repr, get_alternate_repr
+from utils import get_sequence_mask
+from span_reprs import get_avg_repr, get_diff_repr, get_alternate_repr, get_max_repr
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
-
+# Constants
 MODEL_LIST = ['bert', 'spanbert', 'roberta', 'gpt2']
 BERT_MODEL_SIZES = ['base', 'large']
 GPT2_MODEL_SIZES = ['small', 'medium', 'large']
@@ -63,12 +59,16 @@ class Encoder(nn.Module):
                     model_name, do_lower_case=do_lower_case)
             elif model == 'spanbert':
                 # Model is loaded in a different way
-                # Earlier "pytorch_transformers" required a .tar.gz URL/file
-                # Updated library "transformers" requires pytorch_model.bin
-                # and config.json separately.
+                # Earlier "pytorch_transformers" required a .tar.gz URL/file.
+                # Updated library "transformers" requires pytorch_model.bin and config.json
+                # separately. That's why we have to keep the SpanBERT codebase around and initialize
+                # the model using that codebase (based on pytorch_pretrained_bert).
+                # NOTE: By default transformer models are initialized to eval() mode!
+                # Not using the eval() mode will result in randomness.
                 self.model = SpanbertModel.from_pretrained(
-                    model_name)
-                # SpanBERT uses the same tokenizer as BERT
+                    model_name).eval()
+                # SpanBERT uses the same tokenizer as BERT (that's why the slicing in model name).
+                # We use the tokenizer from "transformers" since it provides an almost unified API.
                 self.tokenizer = BertTokenizer.from_pretrained(
                     model_name[4:], do_lower_case=do_lower_case)
 
@@ -83,13 +83,20 @@ class Encoder(nn.Module):
 
             self.model = GPT2Model.from_pretrained(
                 model_name, output_hidden_states=True)
+            # Set the EOS token to be the PAD token since no explicit pad token
+            # in GPT2 implementation.
             self.tokenizer = GPT2Tokenizer.from_pretrained(
-                model_name, do_lower_case=do_lower_case)
+                model_name, do_lower_case=do_lower_case, pad_token="<|endoftext|>")
+
             self.num_layers = self.model.config.n_layer
             self.hidden_size = self.model.config.n_embd
 
         # Set the model name
         self.model_name = model_name
+
+        # Set shift size due to introduction of special tokens
+        self.start_shift = (1 if self.tokenizer._cls_token else 0)
+        self.end_shift = (1 if self.tokenizer._sep_token else 0)
 
         # Set requires_grad to False if not fine tuning
         if not fine_tune:
@@ -116,35 +123,46 @@ class Encoder(nn.Module):
                 )
             return token_ids
 
-        elif get_subword_indices and self.base_name in ['bert', 'spanbert']:
-            # We check for model name since Roberta/GPT2 don't operate at
-            # word level
-
+        elif get_subword_indices:
             # Convert sentence to a list of words
             if type(sentence) is list:
                 # If list then don't do anything
                 pass
             else:
-                # Perform basic tokenization to get list of words
-                sentence = tokenizer.basic_tokenizer.tokenize(sentence)
+                try:
+                    sentence = tokenizer.basic_tokenizer.tokenize(sentence)
+                except AttributeError:
+                    # Basic tokenizer is not a part of Roberta and GPT2
+                    sentence = sentence.strip().split()
 
-            token_ids = []
-            for word_idx, word in enumerate(sentence):
-                subword_list = tokenizer.wordpiece_tokenizer.tokenize(word)
-                subword_ids = tokenizer.convert_tokens_to_ids(subword_list)
+            if self.base_name in ['bert', 'spanbert']:
+                token_ids = []
+                for word_idx, word in enumerate(sentence):
+                    subword_list = tokenizer.wordpiece_tokenizer.tokenize(word)
+                    subword_ids = tokenizer.convert_tokens_to_ids(subword_list)
 
-                subword_to_word_idx += [word_idx] * len(subword_ids)
-                token_ids += subword_ids
+                    subword_to_word_idx += [word_idx] * len(subword_ids)
+                    token_ids += subword_ids
 
+            elif self.base_name in ['roberta', 'gpt2']:
+                token_ids = []
+                for word_idx, word in enumerate(sentence):
+                    subword_list = tokenizer.tokenize(word, add_prefix_space=True)
+                    subword_ids = tokenizer.convert_tokens_to_ids(subword_list)
+
+                    subword_to_word_idx += [word_idx] * len(subword_ids)
+                    token_ids += subword_ids
+            else:
+                raise Exception("%s doesn't support getting word indices"
+                                % self.base_name)
+
+            # In case the model is supported
             final_token_ids = tokenizer.add_special_tokens_single_sequence(
                 token_ids)
-
             # Add -1 to denote the special symbols
-            subword_to_word_idx = ([-1] + subword_to_word_idx + [-1])
+            subword_to_word_idx = (
+                [-1] * self.start_shift + subword_to_word_idx + [-1] * self.end_shift)
             return final_token_ids, subword_to_word_idx
-        else:
-            raise Exception("%s doesn't support getting word indices"
-                            % self.base_name)
 
     def tokenize_sentence(self, sentence, get_subword_indices=False):
         output = self.tokenize(
@@ -178,10 +196,8 @@ class Encoder(nn.Module):
                 max_sentence_len = sentence_len_list[-1]
 
         # Pad the sentences to max length
-        pad_token = (self.tokenizer.eos_token_id if self.base_name == 'gpt2'
-                     else self.tokenizer.pad_token_id)
         all_token_ids = [
-            (token_ids + (max_sentence_len - len(token_ids)) * [pad_token])
+            (token_ids + (max_sentence_len - len(token_ids)) * [self.tokenizer.pad_token_id])
             for token_ids in all_token_ids
         ]
 
@@ -192,26 +208,85 @@ class Encoder(nn.Module):
             ]
 
         # Tensorize the list
-        batch_token_ids = torch.tensor(all_token_ids)
-        batch_lens = torch.tensor(sentence_len_list)
-        batch_token_ids, batch_lens = batch_token_ids.cuda(), batch_lens.cuda()
+        batch_token_ids = torch.tensor(all_token_ids).cuda()
+        batch_lens = torch.tensor(sentence_len_list).cuda()
         if get_subword_indices:
             return (batch_token_ids, batch_lens,
                     torch.tensor(all_subword_to_word_idx))
         else:
             return (batch_token_ids, batch_lens)
 
+    def get_sentence_repr(self, encoded_input, sentence_lens, method='avg'):
+        """Get the sentence encoding of a batch of hidden states.
+        encoded_input: B x L_max x H: Output of the pretrained model
+        sentence_lens: B: Length of sentences in the batch
+        repr_method: Method to reduce the sentence representation to a single vector
+        """
+        # First get input mask
+        batch_size, max_len, h_size = encoded_input.shape
+        # Remove the [SEP] or </s> token from calculation for sentence length
+        # This allows us to mask out the suffix entirely including padding symbols
+        actual_sentence_lens = sentence_lens - self.end_shift
+        encoded_input = encoded_input[:, :(max_len - self.end_shift), :]
+        input_mask = get_sequence_mask(actual_sentence_lens).cuda().float()  # B x L
+        input_mask = torch.unsqueeze(input_mask, dim=2).expand_as(encoded_input)
+        # Mask/Zero out values beyond sentence length
+        encoded_input = encoded_input * input_mask
+
+        # Now remove the start token from calculation as well
+        actual_sentence_lens = actual_sentence_lens - self.start_shift
+        assert (torch.min(actual_sentence_lens) > 0)
+
+        if method == 'avg':
+            # Summing over the padded symbols won't change the actual sum since they have
+            # been masked out
+            sent_repr = torch.sum(encoded_input[:, self.start_shift:, :], dim=1)
+            # Now divide by sentence lengths
+            sent_repr = sent_repr/torch.unsqueeze(actual_sentence_lens, dim=1).float()
+            return sent_repr
+        elif method == 'max':
+            # To avoid errors in max, we can use the mask to make the padded entries affect
+            # max operation. We will just add the min entry to earlier zeroed out padded symbols.
+            min_val = torch.min(encoded_input)
+            encoded_input = encoded_input + (1 - input_mask) * min_val
+            return torch.max(encoded_input[:, self.start_shift:, :], dim=1)[0]
+        else:
+            # First get the end point hidden vectors
+            h_start = encoded_input[:, self.start_shift, :]
+            h_end_list = []
+            for idx in range(batch_size):
+                h_end_list.append(encoded_input[idx, sentence_lens[idx] - 1 - self.end_shift, :])
+            h_end = torch.stack(h_end_list, dim=0)
+
+            if method == "alternate":
+                # Used by Kitaev et al
+                return torch.cat([h_start[:, 0::2], h_end[:, 1::2]], dim=1)
+            elif method == 'diff':
+                return (h_end - h_start)
+            elif method == 'diff_sum':
+                # Used by Ouchi et al
+                return torch.cat([h_end - h_start, h_end + h_start], dim=1)
+            elif method == 'coherent':
+                # Used by Soon et al
+                # Use a partition size of one fourth
+                p_size = int(h_size/4)
+                coherence_term = torch.sum(
+                    h_start[:, 2*p_size:3*p_size] * h_end[:, 3*p_size:], dim=1, keepdim=True)
+                return torch.cat(
+                    [h_start[:, :p_size], h_end[:, p_size:2*p_size], coherence_term], dim=1)
+
+            return torch.cat([h_start, h_end], dim=1)
+
     def forward(self, batch_ids, just_last_layer=False):
         """
         Encode a batch of token IDs.
         batch_ids: B x L
+        just_last_layer: If True return the last layer else return a (learned) wtd avg of layers.
         """
-        pad_token = (self.tokenizer.eos_token_id if self.base_name == 'gpt2'
-                     else self.tokenizer.pad_token_id)
-        input_mask = (batch_ids != pad_token).cuda().float()
+        input_mask = (batch_ids != self.tokenizer.pad_token_id).cuda().float()
         if 'spanbert' in self.model_name:
             # SpanBERT is based on old APIs
-            encoded_layers, _ = self.model(
+            encoded_layers = self.model(
                 batch_ids, attention_mask=input_mask)
             last_layer_states = encoded_layers[-1]
         else:
@@ -234,13 +309,15 @@ class Encoder(nn.Module):
 
 
 if __name__ == '__main__':
-    model = Encoder(model='gpt2', model_size='small').cuda()
-    tokenized_input, input_lengths = model.tokenize_batch(
-        ["Hello unforgiving world!", "What's up"], get_subword_indices=False)
+    model = Encoder(model='bert', model_size='base').cuda()
+    tokenized_input, input_lengths, subword_to_word_ids = model.tokenize_batch(
+        ["Hello unforgiving world!", "What's up"], get_subword_indices=True)
     output = model(tokenized_input)
 
     for idx in range(tokenized_input.shape[0]):
         print(model.tokenizer.convert_ids_to_tokens(
             tokenized_input[idx, :].tolist()))
-    print(get_avg_repr(output, 0, 2).shape)
-    print(get_diff_repr(output, 1, 3).shape)
+        print(subword_to_word_ids[idx, :].tolist())
+
+    for method in ["avg", "max", "diff", "diff_sum", "alternate", "coherent"]:
+        print(method, model.get_sentence_repr(output, input_lengths, method=method).shape)

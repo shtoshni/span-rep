@@ -1,38 +1,25 @@
 import os
+import math
 from os import path
 from encoder import Encoder
-import torch
-from span_reprs import get_avg_repr, get_diff_repr, \
-    get_max_pooling_repr, get_alternate_repr
 
 
-def get_span_reprs(sent_list, model, model_size, start_shift=1, end_shift=1):
+def get_span_reprs(sent_list, model, model_size):
     encoder = Encoder(model=model, model_size=model_size).cuda()
-    span_repr_dict = {"avg": [], "diff": [], "max": [], "alternate": []}
+    span_repr_dict = {"avg": [], "diff": [], "max": [], "alternate": [],
+                      "diff_sum": [], "coherent": []}
 
-    for sent in sent_list:
-        token_ids = encoder.tokenize_sentence(sent)
-        token_ids = token_ids.cuda()  # 1 x L
+    batch_size = 32
+    num_batches = math.ceil(len(sent_list)/batch_size)
+    for chunk_idx in range(num_batches):
+        batch_sents = sent_list[chunk_idx * batch_size: (chunk_idx + 1) * batch_size]
+        token_ids, sent_len = encoder.tokenize_batch(batch_sents)  # B x L
         hidden_states = encoder(token_ids, just_last_layer=True)
-        # Ignore [CLS] and [SEP]
-        start_idx = start_shift
-        end_idx = token_ids.shape[1] - 1 - end_shift
 
-        span_repr_dict["avg"].append(
-            torch.squeeze(get_avg_repr(hidden_states, start_idx, end_idx),
-                          dim=0).cpu().detach().numpy())
-
-        span_repr_dict["diff"].append(
-            torch.squeeze(get_diff_repr(hidden_states, start_idx, end_idx),
-                          dim=0).cpu().detach().numpy())
-
-        span_repr_dict["max"].append(
-            torch.squeeze(get_max_pooling_repr(hidden_states, start_idx, end_idx), dim=0)
-            .cpu().detach().numpy())
-
-        span_repr_dict["alternate"].append(
-            torch.squeeze(get_alternate_repr(hidden_states, start_idx, end_idx), dim=0)
-            .cpu().detach().numpy())
+        for method in span_repr_dict:
+            batch_span_repr = encoder.get_sentence_repr(
+                hidden_states, sent_len, method=method).tolist()
+            span_repr_dict[method] += batch_span_repr
 
     # Write to file
     for method, span_repr_list in span_repr_dict.items():
@@ -47,11 +34,9 @@ def get_span_reprs(sent_list, model, model_size, start_shift=1, end_shift=1):
 
 if __name__ == '__main__':
     root_dir = "/home/shtoshni/Downloads/ppdb"
-    ppdb_file = path.join(root_dir, "ppdb_all.txt")
-
-    output_dir = path.join(root_dir, "outputs")
+    ppdb_file = path.join(root_dir, "ppdb_test.txt")
     # Create a folder for all outputs
-    output_dir = path.join(root_dir, "outputs")
+    output_dir = path.join(root_dir, "outputs_test")
     if not path.exists(output_dir):
         os.makedirs(output_dir)
 
@@ -68,11 +53,9 @@ if __name__ == '__main__':
 
     for model in ['bert', 'spanbert', 'roberta']:
         for model_size in ['base', 'large']:
-            get_span_reprs(sent_list, model, model_size,
-                           start_shift=1, end_shift=1)
+            get_span_reprs(sent_list, model, model_size)
 
     for model in ['gpt2']:
         for model_size in ['small', 'medium', 'large']:
             # Initialize the encoder
-            get_span_reprs(sent_list, model, model_size,
-                           start_shift=0, end_shift=0)
+            get_span_reprs(sent_list, model, model_size)
