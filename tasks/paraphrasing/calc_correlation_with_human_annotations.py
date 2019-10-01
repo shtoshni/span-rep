@@ -2,6 +2,7 @@ import numpy as np
 from os import path
 import scipy.spatial as spatial
 import scipy.stats as stats
+import argparse
 
 
 def load_embeddings(tsv_file):
@@ -38,12 +39,17 @@ def calculate_corr(pair_score_list, embedding_list):
 
 
 if __name__ == '__main__':
-    root_dir = "/home/shtoshni/Downloads/ppdb"
-    ppdb_file = path.join(root_dir, "ppdb_test.txt")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-root_dir", default="/home/shtoshni/Downloads/ppdb", type=str)
+    parser.add_argument("-split", default="all", type=str)
+    args = parser.parse_args()
+
+    root_dir = args.root_dir
+    ppdb_file = path.join(root_dir, "ppdb_" + args.split + ".txt")
     pair_score_list = load_sentence_pairs(ppdb_file)
 
-    method_list = ["avg", "diff", "max", "alternate", "diff_sum", "coherent"]
-    emb_dir = path.join(root_dir, "outputs_test")
+    method_list = ["avg", "diff", "max", "diff_sum", "coherent"]
+    emb_dir = path.join(root_dir, "outputs_" + args.split)
     for model in ['bert', 'spanbert', 'roberta']:
         for model_size in ['base', 'large']:
             for method in method_list:

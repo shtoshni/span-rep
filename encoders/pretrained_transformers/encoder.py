@@ -7,7 +7,6 @@ from transformers import BertTokenizer, RobertaTokenizer, GPT2Tokenizer
 
 from SpanBERT import BertModel as SpanbertModel
 from utils import get_sequence_mask
-from span_reprs import get_avg_repr, get_diff_repr, get_alternate_repr, get_max_repr
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
@@ -258,16 +257,13 @@ class Encoder(nn.Module):
                 h_end_list.append(encoded_input[idx, sentence_lens[idx] - 1 - self.end_shift, :])
             h_end = torch.stack(h_end_list, dim=0)
 
-            if method == "alternate":
-                # Used by Kitaev et al
-                return torch.cat([h_start[:, 0::2], h_end[:, 1::2]], dim=1)
-            elif method == 'diff':
+            if method == 'diff':
                 return (h_end - h_start)
             elif method == 'diff_sum':
                 # Used by Ouchi et al
                 return torch.cat([h_end - h_start, h_end + h_start], dim=1)
             elif method == 'coherent':
-                # Used by Soon et al
+                # Used by Seo et al - https://arxiv.org/pdf/1906.05807.pdf
                 # Use a partition size of one fourth
                 p_size = int(h_size/4)
                 coherence_term = torch.sum(
@@ -319,5 +315,5 @@ if __name__ == '__main__':
             tokenized_input[idx, :].tolist()))
         print(subword_to_word_ids[idx, :].tolist())
 
-    for method in ["avg", "max", "diff", "diff_sum", "alternate", "coherent"]:
+    for method in ["avg", "max", "diff", "diff_sum", "coherent"]:
         print(method, model.get_sentence_repr(output, input_lengths, method=method).shape)

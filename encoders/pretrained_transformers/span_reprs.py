@@ -20,8 +20,3 @@ def get_avg_repr(encoded_input, start_idx, end_idx):
 
 def get_max_repr(encoded_input, start_idx, end_idx):
     return torch.max(encoded_input[:, start_idx:(end_idx + 1), :], dim=1)[0]
-
-
-def get_alternate_repr(encoded_input, start_idx, end_idx):
-    return torch.cat([encoded_input[:, start_idx, 0::2],
-                      encoded_input[:, end_idx, 1::2]], dim=-1)
