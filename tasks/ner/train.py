@@ -206,7 +206,10 @@ if __name__ == "__main__":
         sys.stdout.flush()
 
     print(f"Max F1 {max_f1}")
-    test_f1 = eval(model, test_iter, fname. model_path)
+    # Load the best model again
+    print("Loading best model to evaluate on test data")
+    model.load_state_dict(torch.load(f"{best_fname}.pt"))
+    test_f1 = eval(model, test_iter, fname, model_path)
     print(f"Test F1 {test_f1}")
 
     summary_file = path.join(model_path, "final_report.txt")
