@@ -1,3 +1,6 @@
 [submodule "encoders/diora"]
 	path = encoders/diora
 	url = https://github.com/ExplorerFreda/diora
+[submodule "jiant"]
+	path = jiant
+	url = https://github.com/nyu-mll/jiant.git
