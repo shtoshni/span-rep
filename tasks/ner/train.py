@@ -18,12 +18,13 @@ import logging
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 
-def train(model, iterator, optimizer, criterion, tokenizer, max_gradient_norm=1.0):
+def train(model, iterator, optimizer, optimizer_add, criterion, tokenizer, max_gradient_norm=1.0):
     model.train()
     for i, batch in enumerate(iterator):
         words, x, is_heads, tags, y, seqlens = batch
         _y = y  # for monitoring
         optimizer.zero_grad()
+        optimizer_add.zero_grad()
         logits, y, _ = model(x, y)  # logits: (N, T, VOCAB), y: (N, T)
 
         logits = logits.view(-1, logits.shape[-1])  # (N*T, VOCAB)
@@ -34,7 +35,9 @@ def train(model, iterator, optimizer, criterion, tokenizer, max_gradient_norm=1.
 
         torch.nn.utils.clip_grad_norm_(
             model.parameters(), max_gradient_norm)
+
         optimizer.step()
+        optimizer_add.step()
 
         if i == 0:
             print("=====sanity check======")
@@ -118,10 +121,11 @@ def get_model_name(hp):
     # Only include important options in hash computation
     imp_opts = ['model', 'model_size', 'batch_size',
                 'n_epochs',  'finetuning', 'top_rnns',
-                'seed', 'lr']
+                'seed', 'lr', 'lr_add']
     for key, val in vars(hp).items():
         if key in imp_opts:
             opt_dict[key] = val
+            print("%s\t%s" % (key, val))
 
     str_repr = str(opt_dict.items())
     hash_idx = hashlib.md5(str_repr.encode("utf-8")).hexdigest()
@@ -132,7 +136,8 @@ def get_model_name(hp):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-batch_size", type=int, default=32)
-    parser.add_argument("-lr", type=float, default=0.0001)
+    parser.add_argument("-lr", type=float, default=1e-5)
+    parser.add_argument("-lr_add", type=float, default=2e-4)
     parser.add_argument("-n_epochs", type=int, default=10)
     parser.add_argument("-model", type=str, default='bert')
     parser.add_argument("-model_size", type=str, default='base')
@@ -181,7 +186,9 @@ if __name__ == "__main__":
         dataset=test_dataset, batch_size=hp.batch_size,
         shuffle=False, num_workers=4, collate_fn=pad)
 
-    optimizer = optim.AdamW(model.parameters(), lr=hp.lr, weight_decay=0.0)
+    optimizer = optim.AdamW(model.encoder.parameters(), lr=hp.lr, weight_decay=0.0)
+    optimizer_add = optim.AdamW(model.fc.parameters(), lr=hp.lr_add, weight_decay=0.0)
+
     criterion = nn.CrossEntropyLoss(ignore_index=0)
 
     max_f1 = 0
@@ -189,15 +196,15 @@ if __name__ == "__main__":
         if epoch == 1:
             print("\n%s\n" % model_path)
             model.print_model_info()
-        train(model, train_iter, optimizer, criterion, tokenizer)
+        train(model, train_iter, optimizer, optimizer_add, criterion, tokenizer)
 
         print(f"=========eval at epoch={epoch}=========")
-        fname = os.path.join(model_path, str(epoch))
+        fname = os.path.join(model_path, "model")
         f1 = eval(model, eval_iter, fname, model_path)
 
         if max_f1 < f1:
             max_f1 = f1
-            best_fname = os.path.join(best_model_path, str(epoch))
+            best_fname = os.path.join(best_model_path, "model")
             torch.save(model.state_dict(), f"{best_fname}.pt")
             print(f"weights were saved to {best_fname}.pt")
 
