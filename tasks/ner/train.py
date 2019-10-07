@@ -18,7 +18,7 @@ import logging
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 
-def train(model, iterator, optimizer, criterion, tokenizer):
+def train(model, iterator, optimizer, criterion, tokenizer, max_gradient_norm=1.0):
     model.train()
     for i, batch in enumerate(iterator):
         words, x, is_heads, tags, y, seqlens = batch
@@ -32,6 +32,8 @@ def train(model, iterator, optimizer, criterion, tokenizer):
         loss = criterion(logits, y)
         loss.backward()
 
+        torch.nn.utils.clip_grad_norm_(
+            model.parameters(), max_gradient_norm)
         optimizer.step()
 
         if i == 0:
@@ -179,7 +181,7 @@ if __name__ == "__main__":
         dataset=test_dataset, batch_size=hp.batch_size,
         shuffle=False, num_workers=4, collate_fn=pad)
 
-    optimizer = optim.AdamW(model.parameters(), lr=hp.lr, weight_decay=0.01)
+    optimizer = optim.AdamW(model.parameters(), lr=hp.lr, weight_decay=0.0)
     criterion = nn.CrossEntropyLoss(ignore_index=0)
 
     max_f1 = 0
