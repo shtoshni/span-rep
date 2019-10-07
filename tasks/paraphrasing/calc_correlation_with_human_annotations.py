@@ -50,7 +50,7 @@ if __name__ == '__main__':
 
     method_list = ["avg", "diff", "max", "diff_sum", "coherent"]
     emb_dir = path.join(root_dir, "outputs_" + args.split)
-    for model in ['bert', 'spanbert', 'roberta']:
+    for model in ['bert', 'spanbert', 'roberta', 'xlnet']:
         for model_size in ['base', 'large']:
             for method in method_list:
                 file_prefix = (model + '-' + model_size + '-' + method)

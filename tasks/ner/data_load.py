@@ -57,7 +57,7 @@ class NerDataset(data.Dataset):
             sents.append(words)
             tags_li.append(tags)
 
-        self.sents, self.tags_li = sents, tags_li
+        self.sents, self.tags_li = sents[:1000], tags_li[:1000] # sents, tags_li
 
     def __len__(self):
         return len(self.sents)
@@ -70,7 +70,7 @@ class NerDataset(data.Dataset):
         x, y = [], []  # list of ids
         is_heads = []  # list. 1: the token is the first piece of a word
         for w, t in zip(words, tags):
-            tokens = self.tokenizer.tokenize(w) #  if w not in ("[CLS]", "[SEP]") else [w]
+            tokens = self.tokenizer.tokenize(w)
             xx = self.tokenizer.convert_tokens_to_ids(tokens)
 
             is_head = [1] + [0]*(len(tokens) - 1)

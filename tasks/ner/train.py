@@ -5,11 +5,14 @@ from torch.utils import data
 from model import Net
 from data_load import NerDataset, pad, VOCAB, tag2idx, idx2tag
 import os
+from os import path
 import numpy as np
 import argparse
 import subprocess
 import re
 from tqdm import tqdm
+import hashlib
+from collections import OrderedDict
 
 
 def train(model, iterator, optimizer, criterion, tokenizer):
@@ -102,6 +105,22 @@ def eval(model, iterator, f):
     return f1
 
 
+def get_model_name(hp):
+    opt_dict = OrderedDict()
+    # Only include important options in hash computation
+    imp_opts = ['model', 'model_size', 'batch_size',
+                'n_epochs',  'finetuning', 'top_rnns',
+                'seed', 'lr']
+    for key, val in vars(hp).items():
+        if key in imp_opts:
+            opt_dict[key] = val
+
+    str_repr = str(opt_dict.items())
+    hash_idx = hashlib.md5(str_repr.encode("utf-8")).hexdigest()
+    model_name = "ner_" + str(hash_idx)
+    return model_name
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-batch_size", type=int, default=32)
@@ -111,19 +130,36 @@ if __name__ == "__main__":
     parser.add_argument("-model_size", type=str, default='base')
     parser.add_argument("-finetuning", dest="finetuning", action="store_true")
     parser.add_argument("-top_rnns", dest="top_rnns", action="store_true")
-    parser.add_argument("-logdir", type=str, default="checkpoints/01")
-    parser.add_argument("-trainset", type=str, default="conll2003/train.txt")
-    parser.add_argument("-validset", type=str, default="conll2003/valid.txt")
+    parser.add_argument("-logdir", type=str, default="checkpoints")
+    parser.add_argument("-datadir", type=str,
+                        default="/home/shtoshni/Research/hackathon_2019/tasks/ner/conll2003")
+    parser.add_argument("-seed", type=int, default=0, help="Random seed.")
     hp = parser.parse_args()
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+    torch.manual_seed(hp.seed)
+    np.random.seed(hp.seed)
     model = Net(model=hp.model, model_size=hp.model_size,
                 top_rnns=hp.top_rnns, vocab_size=len(VOCAB),
                 device=device, finetuning=hp.finetuning).cuda()
+    model_name = get_model_name(hp)
+    model_path = path.join(hp.logdir, model_name)
+    best_model_path = path.join(model_path, 'best_models')
+    if not path.exists(model_path):
+        os.makedirs(model_path)
+    if not path.exists(best_model_path):
+        os.makedirs(best_model_path)
 
-    train_dataset = NerDataset(hp.trainset, model.encoder)
-    eval_dataset = NerDataset(hp.validset, model.encoder)
+    config_file = path.join(model_path, "config.txt")
+    with open(config_file, 'w') as f:
+        for key, val in vars(hp).items():
+            if "dir" not in key:
+                f.write(str(key) + "\t" + str(val) + "\n")
+
+    train_dataset = NerDataset(path.join(hp.datadir, "train.txt"), model.encoder)
+    eval_dataset = NerDataset(path.join(hp.datadir, "valid.txt"), model.encoder)
+    test_dataset = NerDataset(path.join(hp.datadir, "test.txt"), model.encoder)
 
     tokenizer = model.encoder.tokenizer
 
@@ -133,8 +169,10 @@ if __name__ == "__main__":
     eval_iter = data.DataLoader(
         dataset=eval_dataset, batch_size=hp.batch_size,
         shuffle=False, num_workers=4, collate_fn=pad)
+    test_iter = data.DataLoader(
+        dataset=test_dataset, batch_size=hp.batch_size,
+        shuffle=False, num_workers=4, collate_fn=pad)
 
-    # optimizer = optim.Adam(model.parameters(), lr=hp.lr)
     optimizer = optim.AdamW(model.parameters(), lr=hp.lr, weight_decay=0.01)
     criterion = nn.CrossEntropyLoss(ignore_index=0)
 
@@ -145,14 +183,23 @@ if __name__ == "__main__":
         train(model, train_iter, optimizer, criterion, tokenizer)
 
         print(f"=========eval at epoch={epoch}=========")
-        if not os.path.exists(hp.logdir):
-            os.makedirs(hp.logdir)
-        fname = os.path.join(hp.logdir, str(epoch))
+        fname = os.path.join(model_path, str(epoch))
         f1 = eval(model, eval_iter, fname)
 
         if max_f1 < f1:
             max_f1 = f1
+            best_fname = os.path.join(best_model_path, str(epoch))
+            torch.save(model.state_dict(), f"{best_fname}.pt")
+            print(f"weights were saved to {best_fname}.pt")
+
         torch.save(model.state_dict(), f"{fname}.pt")
         print(f"weights were saved to {fname}.pt")
 
     print(f"Max F1 {max_f1}")
+    test_f1 = eval(model, test_iter, fname)
+    print(f"Test F1 {test_f1}")
+
+    summary_file = path.join(model_path, "final_report.txt")
+    with open(summary_file, 'w') as f:
+        f.write("Val F1: %.3f\n" % max_f1)
+        f.write("Test F1: %.3f\n" % test_f1)

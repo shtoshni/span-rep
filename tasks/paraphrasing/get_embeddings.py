@@ -28,7 +28,7 @@ def get_sentence_reprs(sent_list, model, model_size):
 
         with open(output_file, 'w') as f:
             for span_repr in span_repr_list:
-                f.write("\t".join(str(elem) for elem in span_repr))
+                f.write("\t".join("{:.3f}".format(elem) for elem in span_repr))
                 f.write("\n")
 
 
@@ -56,7 +56,7 @@ if __name__ == '__main__':
             writer.write(sent1 + "\n")
             writer.write(sent2 + "\n")
 
-    for model in ['bert', 'spanbert', 'roberta']:
+    for model in ['bert', 'spanbert', 'roberta', "xlnet"]:
         for model_size in ['base', 'large']:
             get_sentence_reprs(sent_list, model, model_size)
 

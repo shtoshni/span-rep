@@ -9,6 +9,7 @@ class Net(nn.Module):
         super().__init__()
         self.encoder = Encoder(model=model, model_size=model_size,
                                fine_tune=finetuning)
+        self.finetuning = finetuning
 
         self.top_rnns = top_rnns
         hidden_size = self.encoder.hidden_size
@@ -32,10 +33,13 @@ class Net(nn.Module):
         x = x.to(self.device)
         y = y.to(self.device)
 
-        if self.training and self.finetuning:
-            # print("->bert.train()")
+        if self.training:
             self.encoder.train()
-            enc = self.encoder(x, just_last_layer=True)
+            if self.finetuning:
+                enc = self.encoder(x, just_last_layer=True)
+            else:
+                # Just train the attention over the layers parameter
+                enc = self.encoder(x, just_last_layer=False)
         else:
             self.encoder.eval()
             with torch.no_grad():
