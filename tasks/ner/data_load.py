@@ -57,7 +57,7 @@ class NerDataset(data.Dataset):
             sents.append(words)
             tags_li.append(tags)
 
-        self.sents, self.tags_li = sents[:1000], tags_li[:1000] # sents, tags_li
+        self.sents, self.tags_li = sents, tags_li
 
     def __len__(self):
         return len(self.sents)
