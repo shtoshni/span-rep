@@ -14,6 +14,9 @@ import re
 import hashlib
 from collections import OrderedDict
 
+import logging
+logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
+
 
 def train(model, iterator, optimizer, criterion, tokenizer):
     model.train()
@@ -43,7 +46,7 @@ def train(model, iterator, optimizer, criterion, tokenizer):
             print("=======================")
 
         if i % 50 == 0:  # monitoring
-            print(f"step: {i}, loss: {loss.item()}")
+            logging.info(f"step: {i}, loss: {loss.item()}")
             sys.stdout.flush()
 
 
@@ -182,6 +185,7 @@ if __name__ == "__main__":
     max_f1 = 0
     for epoch in range(1, hp.n_epochs+1):
         if epoch == 1:
+            print("\n%s\n" % model_path)
             model.print_model_info()
         train(model, train_iter, optimizer, criterion, tokenizer)
 
