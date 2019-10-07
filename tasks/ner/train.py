@@ -3,21 +3,20 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils import data
 from model import Net
-from data_load import NerDataset, pad, VOCAB, tag2idx, idx2tag
+from data_load import NerDataset, pad, VOCAB, idx2tag
 import os
 from os import path
 import numpy as np
 import argparse
 import subprocess
 import re
-from tqdm import tqdm
 import hashlib
 from collections import OrderedDict
 
 
 def train(model, iterator, optimizer, criterion, tokenizer):
     model.train()
-    for i, batch in tqdm(enumerate(iterator)):
+    for i, batch in enumerate(iterator):
         words, x, is_heads, tags, y, seqlens = batch
         _y = y  # for monitoring
         optimizer.zero_grad()
