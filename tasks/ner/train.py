@@ -5,6 +5,7 @@ from torch.utils import data
 from model import Net
 from data_load import NerDataset, pad, VOCAB, idx2tag
 import os
+import sys
 from os import path
 import numpy as np
 import argparse
@@ -43,9 +44,10 @@ def train(model, iterator, optimizer, criterion, tokenizer):
 
         if i % 50 == 0:  # monitoring
             print(f"step: {i}, loss: {loss.item()}")
+            sys.stdout.flush()
 
 
-def eval(model, iterator, f):
+def eval(model, iterator, f, model_path):
     model.eval()
 
     Words, Is_heads, Tags, Y, Y_hat = [], [], [], [], []
@@ -62,7 +64,9 @@ def eval(model, iterator, f):
             Y_hat.extend(y_hat.cpu().numpy().tolist())
 
     # gets results and save
-    with open("temp", 'w') as fout, open("temp_2", 'w') as fout_2:
+    temp1_file = path.join(model_path, "temp")
+    temp2_file = path.join(model_path, "temp_2")
+    with open(temp1_file, 'w') as fout, open(temp2_file, 'w') as fout_2:
         for words, is_heads, tags, y_hat in zip(Words, Is_heads, Tags, Y_hat):
             y_hat = [hat for head, hat in zip(is_heads, y_hat) if head == 1]
             preds = [idx2tag[hat] for hat in y_hat]
@@ -77,7 +81,7 @@ def eval(model, iterator, f):
             fout.write("\n")
             fout_2.write("\n")
 
-    eval_proc = subprocess.Popen(['conlleval'], stdin=open("temp_2"),
+    eval_proc = subprocess.Popen(['conlleval'], stdin=open(temp2_file),
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = eval_proc.communicate()
 
@@ -92,15 +96,15 @@ def eval(model, iterator, f):
     final = f + ".F%.3f_full_log" % (f1)
     final_2 = f + ".F%.3f" % (f1)
     with open(final, 'w') as fout, open(final_2, 'w') as fout_2:
-        result = open("temp", "r").read()
+        result = open(temp1_file, "r").read()
         fout.write(f"{result}\n")
         fout.write(f"{full_log}")
 
-        result = open("temp_2", "r").read()
+        result = open(temp2_file, "r").read()
         fout_2.write(f"{result}")
 
-    os.remove("temp")
-    os.remove("temp_2")
+    os.remove(temp1_file)
+    os.remove(temp2_file)
     return f1
 
 
@@ -183,7 +187,7 @@ if __name__ == "__main__":
 
         print(f"=========eval at epoch={epoch}=========")
         fname = os.path.join(model_path, str(epoch))
-        f1 = eval(model, eval_iter, fname)
+        f1 = eval(model, eval_iter, fname, model_path)
 
         if max_f1 < f1:
             max_f1 = f1
@@ -193,9 +197,10 @@ if __name__ == "__main__":
 
         torch.save(model.state_dict(), f"{fname}.pt")
         print(f"weights were saved to {fname}.pt")
+        sys.stdout.flush()
 
     print(f"Max F1 {max_f1}")
-    test_f1 = eval(model, test_iter, fname)
+    test_f1 = eval(model, test_iter, fname. model_path)
     print(f"Test F1 {test_f1}")
 
     summary_file = path.join(model_path, "final_report.txt")
