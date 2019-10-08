@@ -20,7 +20,8 @@ import logging
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 
-def train(model, iterator, optimizer, optimizer_add, scheduler, criterion, tokenizer, max_gradient_norm=1.0):
+def train(model, iterator, optimizer, optimizer_add, scheduler, scheduler_add,
+          criterion, tokenizer, max_gradient_norm=1.0):
     model.train()
     for i, batch in enumerate(iterator):
         words, x, is_heads, tags, y, seqlens = batch
@@ -41,6 +42,7 @@ def train(model, iterator, optimizer, optimizer_add, scheduler, criterion, token
         optimizer.step()
         optimizer_add.step()
         scheduler.step()
+        scheduler_add.step()
 
         if i == 0:
             print("=====sanity check======")
@@ -189,11 +191,15 @@ if __name__ == "__main__":
         dataset=test_dataset, batch_size=hp.batch_size,
         shuffle=False, num_workers=4, collate_fn=pad)
 
-    optimizer = optim.AdamW(model.encoder.parameters(), lr=hp.lr, weight_decay=0.0)
-    optimizer_add = optim.AdamW(model.fc.parameters(), lr=hp.lr_add, weight_decay=0.0)
-    num_train_steps = len(train_dataset.sents)//hp.batch_size
+    optimizer = optim.AdamW(model.encoder.parameters(), lr=hp.lr)
+    optimizer_add = optim.AdamW(model.other_params, lr=hp.lr_add)
+
+    num_train_steps = (hp.n_epochs * len(train_dataset.sents))//hp.batch_size
     warmup_steps = 0.1 * num_train_steps
     scheduler = WarmupLinearSchedule(optimizer, warmup_steps=warmup_steps, t_total=num_train_steps)
+    scheduler_add = WarmupLinearSchedule(
+        optimizer_add, warmup_steps=warmup_steps, t_total=num_train_steps)
+
     criterion = nn.CrossEntropyLoss(ignore_index=0)
 
     max_f1 = 0
@@ -201,7 +207,7 @@ if __name__ == "__main__":
         if epoch == 1:
             print("\n%s\n" % model_path)
             model.print_model_info()
-        train(model, train_iter, optimizer, optimizer_add, scheduler, criterion, tokenizer)
+        train(model, train_iter, optimizer, optimizer_add, scheduler, scheduler_add, criterion, tokenizer)
 
         print(f"=========eval at epoch={epoch}=========")
         fname = os.path.join(model_path, "model")

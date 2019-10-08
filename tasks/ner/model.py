@@ -11,13 +11,16 @@ class Net(nn.Module):
                                fine_tune=finetuning)
         self.finetuning = finetuning
 
+        self.other_params = []
         self.top_rnns = top_rnns
         hidden_size = self.encoder.hidden_size
         if top_rnns:
             self.rnn = nn.LSTM(
                 bidirectional=True, num_layers=2,
                 input_size=hidden_size, hidden_size=hidden_size//2, batch_first=True)
+            self.other_params += self.rnn.parameters()
         self.fc = nn.Linear(hidden_size, vocab_size)
+        self.other_params += self.fc.parameters()
 
         self.device = device
         self.finetuning = finetuning
