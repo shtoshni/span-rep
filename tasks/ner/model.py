@@ -39,7 +39,7 @@ class Net(nn.Module):
         if self.training:
             self.encoder.train()
             if self.finetuning:
-                enc = self.encoder(x, just_last_layer=True)
+                enc = self.encoder(x, just_last_layer=False)
             else:
                 # Just train the attention over the layers parameter
                 enc = self.encoder(x, just_last_layer=False)

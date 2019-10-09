@@ -13,7 +13,7 @@ import subprocess
 import re
 import hashlib
 from collections import OrderedDict
-from transformers import WarmupLinearSchedule
+from transformers import WarmupLinearSchedule, WarmupConstantSchedule
 
 
 import logging
@@ -195,10 +195,13 @@ if __name__ == "__main__":
     optimizer_add = optim.AdamW(model.other_params, lr=hp.lr_add, weight_decay=0.0)
 
     num_train_steps = (hp.n_epochs * len(train_dataset.sents))//hp.batch_size
-    warmup_steps = 0
-    scheduler = WarmupLinearSchedule(optimizer, warmup_steps=warmup_steps, t_total=num_train_steps)
-    scheduler_add = WarmupLinearSchedule(
-        optimizer_add, warmup_steps=warmup_steps, t_total=num_train_steps)
+    warmup_steps = 0.1 * num_train_steps
+    # scheduler = WarmupConstantSchedule(
+    #     optimizer, warmup_steps=warmup_steps, t_total=num_train_steps)
+    # scheduler_add = WarmupConstantSchedule(
+    #     optimizer_add, warmup_steps=warmup_steps, t_total=num_train_steps)
+    scheduler = WarmupConstantSchedule(optimizer, warmup_steps=warmup_steps)
+    scheduler_add = WarmupConstantSchedule(optimizer_add, warmup_steps=warmup_steps)
 
     criterion = nn.CrossEntropyLoss(ignore_index=0)
 
@@ -207,7 +210,8 @@ if __name__ == "__main__":
         if epoch == 1:
             print("\n%s\n" % model_path)
             model.print_model_info()
-        train(model, train_iter, optimizer, optimizer_add, scheduler, scheduler_add, criterion, tokenizer)
+        train(model, train_iter, optimizer, optimizer_add, scheduler,
+              scheduler_add, criterion, tokenizer)
 
         print(f"=========eval at epoch={epoch}=========")
         fname = os.path.join(model_path, "model")
