@@ -225,7 +225,7 @@ class Encoder(nn.Module):
         else:
             return (batch_token_ids, batch_lens)
 
-    def get_sentence_repr(self, encoded_input, sentence_lens, method='avg'):
+    def get_sentence_repr(self, encoded_input, sentence_lens, method='avg', batched=True):
         """Get the sentence encoding of a batch of hidden states.
         encoded_input: B x L_max x H: Output of the pretrained model
         sentence_lens: B: Length of sentences in the batch
@@ -262,11 +262,14 @@ class Encoder(nn.Module):
         else:
             # First get the end point hidden vectors
             h_start = encoded_input[:, self.start_shift, :]
-            h_end_list = []
-            for idx in range(batch_size):
-                h_end_list.append(encoded_input[idx, sentence_lens[idx] - 1 - self.end_shift, :])
-            h_end = torch.stack(h_end_list, dim=0)
-
+            if not batched:
+                h_end_list = []
+                for idx in range(batch_size):
+                    h_end_list.append(encoded_input[idx, sentence_lens[idx] - 1 - self.end_shift, :])
+                h_end = torch.stack(h_end_list, dim=0)
+            else:
+                h_end = encoded_input[torch.arange(batch_size), sentence_lens - 1 - self.end_shift, :]
+                
             if method == 'diff':
                 return (h_end - h_start)
             elif method == 'diff_sum':
