@@ -46,7 +46,7 @@ class Net(nn.Module):
         else:
             self.encoder.eval()
             with torch.no_grad():
-                enc = self.encoder(x, just_last_layer=True)
+                enc = self.encoder(x, just_last_layer=False)
 
         if self.top_rnns:
             enc, _ = self.rnn(enc)
