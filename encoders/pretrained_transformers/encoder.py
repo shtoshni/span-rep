@@ -118,7 +118,7 @@ class Encoder(nn.Module):
         # Attention-based Span representation parameters - MIGHT NOT BE USED
         self.attention_weight = nn.Parameter(torch.ones(self.hidden_size))
 
-    def tokenize(self, sentence, get_subword_indices=False):
+    def tokenize(self, sentence, get_subword_indices=False, force_split=False):
         tokenizer = self.tokenizer
         subword_to_word_idx = []
 
@@ -137,6 +137,8 @@ class Encoder(nn.Module):
             if type(sentence) is list:
                 # If list then don't do anything
                 pass
+            elif force_split:
+                sentence = sentence.strip().split()
             else:
                 try:
                     sentence = tokenizer.basic_tokenizer.tokenize(sentence)
@@ -173,16 +175,18 @@ class Encoder(nn.Module):
                 [-1] * self.start_shift + subword_to_word_idx + [-1] * self.end_shift)
             return final_token_ids, subword_to_word_idx
 
-    def tokenize_sentence(self, sentence, get_subword_indices=False):
+    def tokenize_sentence(self, sentence, get_subword_indices=False, force_split=False):
         output = self.tokenize(
-            sentence, get_subword_indices=get_subword_indices)
+            sentence, get_subword_indices=get_subword_indices,
+            force_split=force_split
+        )
         if get_subword_indices:
             return (torch.tensor(output[0]).unsqueeze(dim=0).cuda(),
                     torch.tensor(output[1]).unsqueeze(dim=0).cuda())
         else:
             return torch.tensor(output).unsqueeze(dim=0).cuda()
 
-    def tokenize_batch(self, list_of_sentences, get_subword_indices=False):
+    def tokenize_batch(self, list_of_sentences, get_subword_indices=False, force_split=False):
         """
         sentence: a whole string containing all the tokens (NOT A LIST).
         """
@@ -194,7 +198,10 @@ class Encoder(nn.Module):
         for sentence in list_of_sentences:
             if get_subword_indices:
                 token_ids, subword_to_word_idx = \
-                    self.tokenize(sentence, get_subword_indices=True)
+                    self.tokenize(
+                        sentence, get_subword_indices=True,
+                        force_split=force_split
+                    )
                 all_subword_to_word_idx.append(subword_to_word_idx)
             else:
                 token_ids = self.tokenize(sentence)
