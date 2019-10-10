@@ -17,14 +17,14 @@ class ConstituentDataset(Dataset):
         # preprocess
         self.data = list()
         for sentence in raw_data:
+            text = sentence['text']
+            tokenized_input, subword2word = encoder.tokenize_sentence(
+                text, get_subword_indices=True, force_split=True)
             for item in sentence['targets']:
                 # skip the 'TOP' label as it overlaps with other labels
                 if item['label'] == 'TOP':
                     continue
-                text = sentence['text']
-                tokenized_input, subword2word = encoder.tokenize_sentence(
-                    text, get_subword_indices=True, force_split=True)
-                start_id, end_id = convert_word_to_subword(
+                span = convert_word_to_subword(
                     subword2word, 
                     torch.tensor(item['span1']).long().view(1, -1),
                     encoder.start_shift
@@ -32,7 +32,7 @@ class ConstituentDataset(Dataset):
                 self.data.append(
                     {
                         'text_ids': tokenized_input,
-                        'span': torch.cat((start_id, end_id), dim=0).view(1, -1),
+                        'span': torch.cat(span, dim=0).view(1, -1),
                         'label': item['label']
                     }
                 )
