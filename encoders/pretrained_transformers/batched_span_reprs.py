@@ -73,7 +73,6 @@ def get_span_repr(encoded_input, start_ids, end_ids, method="avg"):
 
 
 if __name__ == '__main__':
-    from encoders.pretrained_transformers import span_reprs
     model = Encoder(model='xlnet', model_size='base').cuda()
     tokenized_input, input_lengths = model.tokenize_batch(
         ["What's up", "Greetings, my cat is cute!"]
