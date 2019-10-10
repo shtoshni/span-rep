@@ -6,7 +6,7 @@ from transformers import BertModel, RobertaModel, GPT2Model, XLNetModel
 from transformers import BertTokenizer, RobertaTokenizer, GPT2Tokenizer, XLNetTokenizer
 
 from SpanBERT import BertModel as SpanbertModel
-from utils import get_sequence_mask
+from utils import get_sequence_mask, get_span_mask
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
@@ -18,7 +18,7 @@ GPT2_MODEL_SIZES = ['small', 'medium', 'large']
 
 class Encoder(nn.Module):
     def __init__(self, model='bert', model_size='base', cased=True,
-                 fine_tune=False):
+                 fine_tune=False, use_proj=False, proj_dim=256):
         super(Encoder, self).__init__()
         assert(model in MODEL_LIST)
 
@@ -112,11 +112,19 @@ class Encoder(nn.Module):
             for param in self.model.parameters():
                 param.requires_grad = False
 
+        if use_proj:
+            # Apply a projection layer to output of pretrained models
+            self.proj = nn.Linear(self.hidden_size, proj_dim)
+            # Update the hidden size
+            self.hidden_size = proj_dim
+        else:
+            self.proj = None
         # Set parameters required on top of pre-trained models
         self.weighing_params = nn.Parameter(torch.ones(self.num_layers))
 
         # Attention-based Span representation parameters - MIGHT NOT BE USED
-        self.attention_weight = nn.Parameter(torch.ones(self.hidden_size))
+        self.attention_params = nn.Linear(self.hidden_size, 1)
+        nn.init.constant_(self.attention_params.weight, 0)
 
     def tokenize(self, sentence, get_subword_indices=False, force_split=False):
         tokenizer = self.tokenizer
@@ -232,7 +240,7 @@ class Encoder(nn.Module):
         else:
             return (batch_token_ids, batch_lens)
 
-    def get_sentence_repr(self, encoded_input, sentence_lens, method='avg', batched=True):
+    def get_sentence_repr(self, encoded_input, sentence_lens, method='avg'):
         """Get the sentence encoding of a batch of hidden states.
         encoded_input: B x L_max x H: Output of the pretrained model
         sentence_lens: B: Length of sentences in the batch
@@ -266,16 +274,15 @@ class Encoder(nn.Module):
             min_val = torch.min(encoded_input)
             encoded_input = encoded_input + (1 - input_mask) * min_val
             return torch.max(encoded_input[:, self.start_shift:, :], dim=1)[0]
+        elif method == "attn":
+            attn_mask = (1 - input_mask) * (-1e10)
+            attn_logits = self.attention_params(encoded_input) + attn_mask
+            attention_wts = nn.functional.softmax(attn_logits, dim=1)
+            return torch.sum(attention_wts * encoded_input, dim=1)
         else:
             # First get the end point hidden vectors
             h_start = encoded_input[:, self.start_shift, :]
-            if not batched:
-                h_end_list = []
-                for idx in range(batch_size):
-                    h_end_list.append(encoded_input[idx, sentence_lens[idx] - 1 - self.end_shift, :])
-                h_end = torch.stack(h_end_list, dim=0)
-            else:
-                h_end = encoded_input[torch.arange(batch_size), sentence_lens - 1 - self.end_shift, :]
+            h_end = encoded_input[torch.arange(batch_size), sentence_lens - 1 - self.end_shift, :]
 
             if method == 'diff':
                 return (h_end - h_start)
@@ -312,7 +319,7 @@ class Encoder(nn.Module):
             encoded_layers = encoded_layers[1:]
 
         if just_last_layer:
-            return last_layer_states
+            output = last_layer_states
         else:
 
             wtd_encoded_repr = 0
@@ -321,11 +328,35 @@ class Encoder(nn.Module):
             for i in range(self.num_layers):
                 wtd_encoded_repr += soft_weight[i] * encoded_layers[i]
 
-            return wtd_encoded_repr
+            output = wtd_encoded_repr
+
+        if self.proj:
+            return self.proj(output)
+        else:
+            return output
+
+    def get_attn_span_repr(self, encoded_input, start_ids, end_ids):
+        """Returns a attention-weighed pooled span representation."""
+        span_mask = get_span_mask(start_ids, end_ids, encoded_input.shape[1])
+        attn_mask = (1 - span_mask) * (-1e10)
+        attn_logits = self.attention_params(encoded_input) + attn_mask
+        attention_wts = nn.functional.softmax(attn_logits, dim=1)
+        return torch.sum(attention_wts * encoded_input, dim=1)
+
+    def get_coref_span_repr(self, encoded_input, start_ids, end_ids):
+        """Returns a attention-weighed pooled span representation concatenated with end points.
+        Introduced by Kenton Lee et al 2017 in End-to-End Coref paper.
+        """
+        attn_term = self.get_attn_span_repr(encoded_input, start_ids, end_ids)
+        batch_size = encoded_input.shape[0]
+        h_start = encoded_input[torch.arange(batch_size), start_ids, :]
+        h_end = encoded_input[torch.arange(batch_size), end_ids, :]
+
+        return torch.cat([h_start, h_end, attn_term], dim=-1)
 
 
 if __name__ == '__main__':
-    model = Encoder(model='xlnet', model_size='base').cuda()
+    model = Encoder(model='xlnet', model_size='base', use_proj=True).cuda()
     tokenized_input, input_lengths = model.tokenize_batch(
         ["Hello unforgiving world!", "What's up"], get_subword_indices=False)
     output = model(tokenized_input)
@@ -334,5 +365,10 @@ if __name__ == '__main__':
         print(model.tokenizer.convert_ids_to_tokens(
             tokenized_input[idx, :].tolist()))
 
-    for method in ["avg", "max", "diff", "diff_sum", "coherent"]:
+    for method in ["avg", "max", "diff", "diff_sum", "coherent", "attn"]:
         print(method, model.get_sentence_repr(output, input_lengths, method=method).shape)
+
+    # Sanity check since the attention weights are initialized to 0, the two reprs should match
+    avg_repr = model.get_sentence_repr(output, input_lengths, method="avg")
+    attn_repr = model.get_sentence_repr(output, input_lengths, method="attn")
+    print("Diff: %.3f" % (torch.norm(avg_repr - attn_repr)))

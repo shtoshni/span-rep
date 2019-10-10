@@ -16,10 +16,10 @@ def get_diff_sum_repr(encoded_input, start_ids, end_ids):
     """Calculates the difference + sum based span representation: [h_j - h_i; h_j + h_i]"""
     batch_size = encoded_input.shape[0]
     span_repr = torch.cat([
-        encoded_input[torch.arange(batch_size), end_ids, :] - \
-            encoded_input[torch.arange(batch_size), start_ids, :],
-        encoded_input[torch.arange(batch_size), end_ids, :] + \
-            encoded_input[torch.arange(batch_size), start_ids, :]
+        encoded_input[torch.arange(batch_size), end_ids, :]
+        - encoded_input[torch.arange(batch_size), start_ids, :],
+        encoded_input[torch.arange(batch_size), end_ids, :]
+        + encoded_input[torch.arange(batch_size), start_ids, :]
         ], dim=1)
     return span_repr
 
@@ -52,8 +52,8 @@ def get_coherent_repr(encoded_input, start_ids, end_ids):
 
 
 def get_span_repr(encoded_input, start_ids, end_ids, method="avg"):
-    """ encoded_input: (B, L_max, H) float tensor. 
-    start_ids, end_ids: (B, ) long tensor. 
+    """ encoded_input: (B, L_max, H) float tensor.
+    start_ids, end_ids: (B, ) long tensor.
     """
     if torch.cuda.is_available():
         start_ids = start_ids.cuda()
@@ -72,8 +72,26 @@ def get_span_repr(encoded_input, start_ids, end_ids, method="avg"):
         assert ("Method not implemented")
 
 
+def get_repr_size(hidden_size, method="avg"):
+    if method == "avg":
+        return hidden_size
+    elif method == "max":
+        return hidden_size
+    elif method == "diff":
+        return hidden_size
+    elif method == "diff_sum":
+        return 2 * hidden_size
+    elif method == "coherent":
+        return (hidden_size//2 + 1)
+    elif method == "attn":
+        return hidden_size
+    elif method == "coref":
+        return 3 * hidden_size
+    else:
+        assert ("Method not implemented")
+
+
 if __name__ == '__main__':
-    from encoders.pretrained_transformers import span_reprs
     model = Encoder(model='xlnet', model_size='base').cuda()
     tokenized_input, input_lengths = model.tokenize_batch(
         ["What's up", "Greetings, my cat is cute!"]
@@ -84,7 +102,7 @@ if __name__ == '__main__':
         start_ids = torch.tensor([0, 0]).long()
         end_ids = input_lengths - 1
         print("Method: %s, Shape: %s" % (
-                method, str(get_span_repr(encoded_input, start_ids, end_ids,
-                    method=method).shape)
+                method, str(
+                    get_span_repr(encoded_input, start_ids, end_ids, method=method).shape)
             )
         )
