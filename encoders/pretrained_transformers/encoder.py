@@ -269,7 +269,7 @@ class Encoder(nn.Module):
                 h_end = torch.stack(h_end_list, dim=0)
             else:
                 h_end = encoded_input[torch.arange(batch_size), sentence_lens - 1 - self.end_shift, :]
-                
+
             if method == 'diff':
                 return (h_end - h_start)
             elif method == 'diff_sum':
