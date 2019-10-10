@@ -138,8 +138,7 @@ if __name__ == '__main__':
             encoder=encoder
         )
         data_loader[split] = DataLoader(data_set[split], args.batch_size, 
-            collate_fn=collate_fn)
-        # shuffle=(split=='train')) # TODO(freda) shuffle for training set
+            collate_fn=collate_fn, shuffle=(split=='train'))
     
     # initialize models: MLP
     logger.info('Initializing models.')
