@@ -26,6 +26,24 @@ class CorefModel(nn.Module):
         )
         self.training_criterion = nn.BCELoss()
 
+    def get_other_params(self):
+        core_encoder_param_names = set()
+        for name, param in self.encoder.model.named_parameters():
+            if param.requires_grad:
+                core_encoder_param_names.add(name)
+
+        other_params = []
+        print("\nParams outside core transformer params:\n")
+        for name, param in self.named_parameters():
+            if param.requires_grad and name not in core_encoder_param_names:
+                print(name, param.data.size())
+                other_params.append(param)
+        print("\n")
+        return other_params
+
+    def get_core_params(self):
+        return self.encoder.model.parameters()
+
     def calc_span_repr(self, encoded_input, span_indices):
         span_start, span_end = span_indices[:, 0], span_indices[:, 1]
         if self.pool_method == "attn":
