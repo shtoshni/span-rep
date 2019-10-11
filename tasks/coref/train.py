@@ -20,9 +20,9 @@ def parse_args():
     parser.add_argument(
         "-model_dir", type=str,
         default="/home/shtoshni/Research/hackathon_2019/tasks/coref/checkpoints")
-    parser.add_argument("-batch_size", type=int, default=64)
-    parser.add_argument("-eval_batch_size", type=int, default=64)
-    parser.add_argument("-n_epochs", type=int, default=10)
+    parser.add_argument("-batch_size", type=int, default=32)
+    parser.add_argument("-eval_batch_size", type=int, default=32)
+    parser.add_argument("-n_epochs", type=int, default=5)
     parser.add_argument("-lr", type=float, default=1e-4)
     parser.add_argument("-lr_tune", type=float, default=1e-5)
     parser.add_argument("-span_dim", type=int, default=256)
@@ -192,7 +192,7 @@ def main():
             optimizer, mode='max', patience=5, factor=0.5)
         steps_done = 0
         max_f1 = 0
-        num_steps = hp.n_epochs * len(train_iter.data()) // hp.batch_size
+        num_steps = (hp.n_epochs * len(train_iter.data())) // hp.batch_size
         logging.info("Total training steps: %d" % num_steps)
 
         location = path.join(best_model_path, "model.pt")
