@@ -1,12 +1,13 @@
 from torchtext.data import Example, Field, Dataset
 import torchtext.data as data
 import json
+import os
 
 
 class CorefDataset(Dataset):
     """Class for parsing the Ontonotes coref dataset."""
 
-    def __init__(self, path, model, feedback=False,
+    def __init__(self, path, model, train_frac=1.0,
                  encoding="utf-8", separator="\t",
                  max_seq_len=512):
         text_field = Field(sequential=True, use_vocab=False, include_lengths=True,
@@ -18,28 +19,34 @@ class CorefDataset(Dataset):
                   ('label', non_seq_field)]
 
         examples = []
-        with open(path, encoding=encoding) as f:
-            counter = 0
-            for line in f:
-                if feedback:
-                    counter += 1
-                    if counter > 1000:
-                        break
+        f = open(path, encoding=encoding)
+        lines = f.readlines()
+        is_train = self.check_for_train_file(path)
 
-                instance = json.loads(line)
-                text, subword_to_word_idx = model.tokenize(
-                    instance["text"].split(), get_subword_indices=True)
+        if is_train and train_frac < 1.0:
+            red_num_lines = int(len(lines) * train_frac)
+            lines = lines[:red_num_lines]
 
-                for target in instance["targets"]:
-                    span1_index = self.get_tokenized_span_indices(
-                        subword_to_word_idx, target["span1"])
-                    span2_index = self.get_tokenized_span_indices(
-                        subword_to_word_idx, target["span2"])
-                    label = target["label"]
-                    examples.append(
-                        Example.fromlist([text, span1_index, span2_index, label], fields))
+        for line in lines:
+            instance = json.loads(line)
+            text, subword_to_word_idx = model.tokenize(
+                instance["text"].split(), get_subword_indices=True)
+
+            for target in instance["targets"]:
+                span1_index = self.get_tokenized_span_indices(
+                    subword_to_word_idx, target["span1"])
+                span2_index = self.get_tokenized_span_indices(
+                    subword_to_word_idx, target["span2"])
+                label = target["label"]
+                examples.append(
+                    Example.fromlist([text, span1_index, span2_index, label], fields))
 
         super(CorefDataset, self).__init__(examples, fields)
+
+    def check_for_train_file(self, file_path):
+        if os.path.basename(file_path) == "train.json":
+            return True
+        return False
 
     @staticmethod
     def get_tokenized_span_indices(subword_to_word_idx, orig_span_indices):
@@ -54,14 +61,18 @@ class CorefDataset(Dataset):
         return len(example.text)
 
     @classmethod
-    def iters(cls, path, model, batch_size=32, feedback=False):
+    def iters(cls, path, model, batch_size=32, eval_batch_size=32, train_frac=1.0):
         train, val, test = CorefDataset.splits(
             path=path, train='train.json', validation='development.json', test='test.json',
-            model=model, feedback=feedback)
+            model=model, train_frac=train_frac)
 
-        train_iter, val_iter, test_iter = data.BucketIterator.splits(
-            (train, val, test), batch_size=batch_size,
+        train_iter = data.BucketIterator(
+            train, batch_size=batch_size,
             sort_within_batch=True, shuffle=True, repeat=False)
+
+        val_iter, test_iter = data.BucketIterator.splits(
+            (val, test), batch_size=eval_batch_size,
+            sort_within_batch=True, shuffle=False, repeat=False)
 
         return (train_iter, val_iter, test_iter)
 
@@ -70,7 +81,11 @@ if __name__ == '__main__':
     from encoders.pretrained_transformers import Encoder
     encoder = Encoder(cased=False)
     path = "/share/data/lang/users/freda/codebase/hackathon_2019/tasks/constituent/data/edges/ontonotes/coref/"
-    train_iter, val_iter, test_iter = CorefDataset.iters(path, encoder, feedback=True)
+    train_iter, val_iter, test_iter = CorefDataset.iters(path, encoder, train_frac=1.0)
+
+    print("Train size:", len(train_iter.data()))
+    print("Val size:", len(val_iter.data()))
+    print("Test size:", len(test_iter.data()))
 
     for batch_data in train_iter:
         print(batch_data.text[0].shape)

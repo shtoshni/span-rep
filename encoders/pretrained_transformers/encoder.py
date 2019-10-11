@@ -176,8 +176,11 @@ class Encoder(nn.Module):
                                 % self.base_name)
 
             # In case the model is supported
-            final_token_ids = tokenizer.add_special_tokens_single_sequence(
-                token_ids)
+            if self.base_name == 'gpt2':
+                final_token_ids = token_ids
+            else:
+                final_token_ids = tokenizer.add_special_tokens_single_sequence(
+                    token_ids)
             # Add -1 to denote the special symbols
             subword_to_word_idx = (
                 [-1] * self.start_shift + subword_to_word_idx + [-1] * self.end_shift)

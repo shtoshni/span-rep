@@ -195,7 +195,7 @@ if __name__ == "__main__":
     optimizer_add = optim.AdamW(model.other_params, lr=hp.lr_add, weight_decay=0.0)
 
     num_train_steps = (hp.n_epochs * len(train_dataset.sents))//hp.batch_size
-    warmup_steps = 0.1 * num_train_steps
+    warmup_steps = 0  #.1 * num_train_steps
     # scheduler = WarmupConstantSchedule(
     #     optimizer, warmup_steps=warmup_steps, t_total=num_train_steps)
     # scheduler_add = WarmupConstantSchedule(
