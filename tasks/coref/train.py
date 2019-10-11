@@ -57,7 +57,7 @@ def train(model, train_iter, val_iter, optimizer, optimizer_tune, scheduler,
     model.train()
 
     steps_done = init_steps
-    EVAL_STEPS = 1000
+    EVAL_STEPS = 3000
     while (steps_done < num_steps):
         logging.info("Epoch started")
         for idx, batch_data in enumerate(train_iter):
@@ -189,7 +189,7 @@ def main():
         optimizer = torch.optim.Adam(model.get_other_params(), lr=hp.lr)
 
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='max', patience=5, factor=0.5)
+            optimizer, mode='max', patience=2, factor=0.5)
         steps_done = 0
         max_f1 = 0
         num_steps = (hp.n_epochs * len(train_iter.data())) // hp.batch_size
