@@ -20,31 +20,40 @@ class ConstituentDataset(Dataset):
             text = sentence['text']
             tokenized_input, subword2word = encoder.tokenize_sentence(
                 text, get_subword_indices=True, force_split=True)
+            curr_span_labels = dict()
             for item in sentence['targets']:
-                # skip the 'TOP' label as it overlaps with other labels
-                if item['label'] == 'TOP':
-                    continue
-                span = convert_word_to_subword(
-                    subword2word, 
-                    torch.tensor(item['span1']).long().view(1, -1),
-                    encoder.start_shift
-                )
+                span = tuple(item['span1'])
+                if span not in curr_span_labels:
+                    curr_span_labels[span] = set()
+                label = item['label']
+                self.add_label(label)
+                curr_span_labels[span].add(self.label_dict[label])
+            start_ids, end_ids = convert_word_to_subword(
+                subword2word,
+                torch.tensor([
+                    span for span in sorted(curr_span_labels.keys())
+                ]).long().view(-1, 2),
+                encoder.start_shift
+            )
+            tokenized_input = tokenized_input.cpu()
+            tokenized_span_ranges = torch.cat(
+                (start_ids.view(-1, 1), end_ids.view(-1, 1)), dim=1)
+            for i, span in enumerate(sorted(curr_span_labels.keys())):
+                labels = curr_span_labels[span]
                 self.data.append(
                     {
                         'text_ids': tokenized_input,
-                        'span': torch.cat(span, dim=0).view(1, -1),
-                        'label': item['label']
+                        'span': tokenized_span_ranges[i].view(1, -1).cpu(),
+                        'labels': labels
                     }
                 )
-                self.add_label(item['label'])
-                assert len(sentence['text'].split()) >= item['span1'][1]
-    
+                
     def __len__(self):
         return len(self.data)
     
     def __getitem__(self, index):
         return self.data[index]['text_ids'], self.data[index]['span'], \
-            self.label_dict[self.data[index]['label']]
+            self.data[index]['labels']
 
     @classmethod
     def add_label(cls, label):
@@ -60,28 +69,17 @@ def collate_fn(data):
     sents, spans, labels = list(zip(*data))
     max_length = max(item.shape[1] for item in sents)
     pad_id = ConstituentDataset.encoder.tokenizer.pad_token_id
-    if torch.cuda.is_available():
-        sents = torch.cat([
-            torch.cat(
-                [
-                    item, 
-                    torch.tensor([pad_id] * (max_length - item.shape[1])).view(
-                        1, -1).long().cuda()
-                ], dim=1
-            ) for item in sents
-        ], dim=0)
-    else:
-        sents = torch.cat([
-            torch.cat(
-                [
-                    item, 
-                    torch.tensor([pad_id] * (max_length - item.shape[1])).view(
-                        1, -1).long()
-                ], dim=1
-            ) for item in sents
-        ], dim=0)
+    batch_size = len(sents)
+    padded_sents = pad_id * torch.ones(batch_size, max_length).long()
+    for i, sent in enumerate(sents):
+        padded_sents[i, :sent.shape[1]] = sent[0, :]
     spans = torch.cat(spans, dim=0)
-    return sents, spans, labels
+    one_hot_labels = torch.zeros(
+        batch_size, len(ConstituentDataset.label_dict)).long()
+    for i, item in enumerate(labels):
+        for l in item:
+            one_hot_labels[i, l] = 1
+    return padded_sents, spans, one_hot_labels
 
 
 # unit test
