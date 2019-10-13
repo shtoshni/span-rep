@@ -2,3 +2,4 @@
 __pycache__/
 **/checkpoints/
 local_output/
+**/slurm*
