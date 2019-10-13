@@ -2,6 +2,7 @@ import argparse
 import logging
 import numpy as np
 import os
+import time
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -86,7 +87,7 @@ if __name__ == '__main__':
     parser.add_argument('--eval-step', type=int, default=500)
     parser.add_argument('--seed', type=int, default=1111)
     # slurm supportive snippets 
-    parser.add_argument('--epoch-run', type=int, default=5)
+    parser.add_argument('--time-limit', type=float, default=13800)
     # customized arguments
     parser.add_argument('--hidden-dims', type=int, nargs='+', default=[256])
     parser.add_argument('--model-type', type=str, default='bert')
@@ -98,6 +99,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # save arguments
+    args.start_time = time.time()
     args_save_path = os.path.join(
         args.model_path, args.model_name + '.args.pt'
     )
@@ -220,7 +222,7 @@ if __name__ == '__main__':
 
     # training
     terminate = False
-    for epoch in range(min(args.epochs, args.epoch_run + args.start_epoch)):
+    for epoch in range(args.epochs):
         if terminate:
             break
         model.train()
@@ -254,6 +256,9 @@ if __name__ == '__main__':
                 )
             # validate
             if actual_step % args.eval_step == 0:
+                if (time.time() - args.start_time) >= args.time_limit:
+                    logger.info('Training time is almost up -- terminating.')
+                    exit(0)
                 model.eval()
                 logger.info('-' * 80)
                 with torch.no_grad():
@@ -307,13 +312,12 @@ if __name__ == '__main__':
                     )
 
     # finished training, testing
-    if (args.start_epoch + args.epoch_run >= args.epochs) or terminate:
-        assert best_model is not None
-        assert (not args.use_proj) or (best_proj is not None)
-        model.load_state_dict(best_model)
-        if args.use_proj:
-            encoder.proj.load_state_dict(best_proj)
-        model.eval()
-        with torch.no_grad():
-            test_f1 = validate(data_loader['test'], model)
-        logger.info(f'Test F1 {test_f1 * 100:6.2f}%')
+    assert best_model is not None
+    assert (not args.use_proj) or (best_proj is not None)
+    model.load_state_dict(best_model)
+    if args.use_proj:
+        encoder.proj.load_state_dict(best_proj)
+    model.eval()
+    with torch.no_grad():
+        test_f1 = validate(data_loader['test'], model)
+    logger.info(f'Test F1 {test_f1 * 100:6.2f}%')
