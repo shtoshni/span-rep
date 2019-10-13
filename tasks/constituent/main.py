@@ -74,7 +74,7 @@ if __name__ == '__main__':
     # arguments from snippets
     parser = argparse.ArgumentParser()
     parser.add_argument('--data-path', type=str, 
-        default='tasks/constituent/data/edges/ontonotes/const/debug')
+        default='tasks/constituent/data/edges/ontonotes/const/nonterminal')
     parser.add_argument('--model-path', type=str, 
         default='tasks/constituent/checkpoints')
     parser.add_argument('--model-name', type=str, default='debug')
@@ -82,8 +82,8 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=5)
     parser.add_argument('--optimizer', type=str, default='Adam')
     parser.add_argument('--learning-rate', type=float, default=5e-4)
-    parser.add_argument('--log-step', type=int, default=100)
-    parser.add_argument('--eval-step', type=int, default=1000)
+    parser.add_argument('--log-step', type=int, default=10)
+    parser.add_argument('--eval-step', type=int, default=500)
     parser.add_argument('--seed', type=int, default=1111)
     # slurm supportive snippets 
     parser.add_argument('--epoch-run', type=int, default=5)
@@ -93,6 +93,8 @@ if __name__ == '__main__':
     parser.add_argument('--model-size', type=str, default='base')
     parser.add_argument('--uncased', action='store_false', dest='cased')
     parser.add_argument('--encoding-method', type=str, default='avg')
+    parser.add_argument('--use-proj', action='store_true', default=False)
+    parser.add_argument('--proj-dim', type=int, default=256)
     args = parser.parse_args()
 
     # save arguments
@@ -127,7 +129,9 @@ if __name__ == '__main__':
     logger.propagate = False
     
     # create data sets, tokenizers, and data loaders
-    encoder = Encoder(args.model_type, args.model_size, args.cased)
+    encoder = Encoder(args.model_type, args.model_size, 
+        args.cased, use_proj=args.use_proj, proj_dim=args.proj_dim
+    )
     data_loader_path = os.path.join(
         args.model_path, args.model_name + '.loader.pt'
     )
@@ -159,11 +163,13 @@ if __name__ == '__main__':
     # initialize models: MLP
     logger.info('Initializing models.')
     if args.encoding_method in ['avg', 'max', 'diff']:
-        input_dim = encoder.hidden_size
+        input_dim = args.proj_dim if args.use_proj else encoder.hidden_size
     elif args.encoding_method in ['diff_sum']:
-        input_dim = encoder.hidden_size * 2
+        input_dim = (
+            args.proj_dim if args.use_proj else encoder.hidden_size) * 2
     elif args.encoding_method in ['coherent']:
-        input_dim = encoder.hidden_size // 4 * 2 + 1
+        input_dim = (args.proj_dim if args.use_proj else encoder.hidden_size)\
+            // 4 * 2 + 1
     else:
         raise Exception(
             f'Encoding method {args.encoding_method} not supported.')
@@ -176,14 +182,17 @@ if __name__ == '__main__':
     
     # initialize optimizer
     logger.info('Initializing optimizer.')
+    params = list(model.parameters())
+    if args.use_proj:
+        params += list(encoder.proj.parameters())
     optimizer = getattr(torch.optim, args.optimizer)(
-        model.parameters(), 
-        lr=args.learning_rate
+        params, lr=args.learning_rate
     )
     
     # initialize best model info, and lr controller
     best_f1 = 0
     best_model = None
+    best_proj = None
     lr_controller = LearningRateController()
 
     # load checkpoint, if exists
@@ -203,6 +212,8 @@ if __name__ == '__main__':
         torch.cuda.random.set_rng_state(checkpoint['cuda_rng_state'])
         args.start_epoch = checkpoint['epoch']
         args.epoch_step = checkpoint['step']
+        if args.use_proj:
+            encoder.proj.load_state_dict(checkpoint['enc_proj'])
         if lr_controller.not_improved >= lr_controller.terminate_range:
             logger.info('No more optimization, exiting.')
             exit(0)
@@ -253,25 +264,32 @@ if __name__ == '__main__':
                 )
                 # update when there is a new best model
                 if curr_f1 > best_f1:
-                    best_f1 = curr_f1
-                    best_model = model.state_dict()
                     best_model_path = os.path.join(
                         args.model_path, args.model_name + '.best.pt'
                     )
-                    torch.save(best_model, best_model_path)
+                    best_f1 = curr_f1
+                    best_model = model.state_dict()
+                    if args.use_proj:
+                        best_proj = encoder.proj.state_dict()
+                        torch.save((best_model, best_proj), best_model_path)
+                    else:
+                        torch.save(best_model, best_model_path)
                     logger.info('New best model!')
                 logger.info('-' * 80)
                 model.train()
                 # save checkpoint
                 torch.save({
                     'model': model.state_dict(),
+                    'best_proj': best_proj,
                     'best_model': best_model,
                     'best_f1': best_f1,
                     'optimizer': optimizer.state_dict(),
                     'epoch': epoch,
                     'step': step,
                     'lr_controller': lr_controller,
-                    'cuda_rng_state': torch.cuda.random.get_rng_state()
+                    'cuda_rng_state': torch.cuda.random.get_rng_state(),
+                    'enc_proj': None if not args.use_proj else \
+                        encoder.proj.state_dict()
                 }, ckpt_path)
                 # update validation result
                 not_improved_epoch = lr_controller.add_value(curr_f1)
@@ -291,7 +309,10 @@ if __name__ == '__main__':
     # finished training, testing
     if (args.start_epoch + args.epoch_run >= args.epochs) or terminate:
         assert best_model is not None
+        assert (not args.use_proj) or (best_proj is not None)
         model.load_state_dict(best_model)
+        if args.use_proj:
+            encoder.proj.load_state_dict(best_proj)
         model.eval()
         with torch.no_grad():
             test_f1 = validate(data_loader['test'], model)
