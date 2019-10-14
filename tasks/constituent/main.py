@@ -256,9 +256,6 @@ if __name__ == '__main__':
                 )
             # validate
             if actual_step % args.eval_step == 0:
-                if (time.time() - args.start_time) >= args.time_limit:
-                    logger.info('Training time is almost up -- terminating.')
-                    exit(0)
                 model.eval()
                 logger.info('-' * 80)
                 with torch.no_grad():
@@ -310,6 +307,9 @@ if __name__ == '__main__':
                     optimizer = getattr(torch.optim, args.optimizer)(
                         params, lr=optimizer.param_groups[0]['lr'] / 2.0
                     )
+                if (time.time() - args.start_time) >= args.time_limit:
+                    logger.info('Training time is almost up -- terminating.')
+                    exit(0)
 
     # finished training, testing
     assert best_model is not None
