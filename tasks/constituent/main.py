@@ -308,7 +308,7 @@ if __name__ == '__main__':
                         f'{optimizer.param_groups[0]["lr"] / 2.0:.8f}'
                     )
                     optimizer = getattr(torch.optim, args.optimizer)(
-                        model.parameters(), lr=optimizer.param_groups[0]['lr'] / 2.0
+                        params, lr=optimizer.param_groups[0]['lr'] / 2.0
                     )
 
     # finished training, testing
