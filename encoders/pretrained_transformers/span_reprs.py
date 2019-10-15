@@ -1,8 +1,7 @@
 """Different batched non-parametric span representations."""
 import torch
 import torch.nn as nn
-from encoder import Encoder
-from utils import get_span_mask
+from encoders.pretrained_transformers.utils import get_span_mask
 from abc import ABC, abstractmethod
 
 

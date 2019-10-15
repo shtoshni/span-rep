@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from encoders.pretrained_transformers import Encoder
-from span_reprs import get_span_module
+from encoders.pretrained_transformers.span_reprs import get_span_module
 
 
 class CorefModel(nn.Module):

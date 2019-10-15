@@ -5,8 +5,8 @@ import logging
 from transformers import BertModel, RobertaModel, GPT2Model, XLNetModel
 from transformers import BertTokenizer, RobertaTokenizer, GPT2Tokenizer, XLNetTokenizer
 
-from SpanBERT import BertModel as SpanbertModel
-from utils import get_sequence_mask, get_span_mask
+from encoders.pretrained_transformers.SpanBERT import BertModel as SpanbertModel
+from encoders.pretrained_transformers.utils import get_sequence_mask
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
@@ -304,9 +304,10 @@ class Encoder(nn.Module):
             return torch.max(encoded_input[:, self.start_shift:, :], dim=1)[0]
         elif method == "attn":
             attn_mask = (1 - input_mask) * (-1e10)
-            attn_logits = self.attention_params(encoded_input) + attn_mask
+            attn_logits = (self.attention_params(encoded_input[:, self.start_shift:, :])
+                           + attn_mask[:, self.start_shift:, :])
             attention_wts = nn.functional.softmax(attn_logits, dim=1)
-            return torch.sum(attention_wts * encoded_input, dim=1)
+            return torch.sum(attention_wts * encoded_input[:, self.start_shift:, :], dim=1)
         else:
             # First get the end point hidden vectors
             h_start = encoded_input[:, self.start_shift, :]
@@ -327,10 +328,12 @@ class Encoder(nn.Module):
                     [h_start[:, :p_size], h_end[:, p_size:2*p_size], coherence_term], dim=1)
             elif method == 'coref':
                 attn_mask = (1 - input_mask) * (-1e10)
-                attn_logits = self.attention_params(encoded_input) + attn_mask
+                attn_logits = (self.attention_params(encoded_input[:, self.start_shift:, :])
+                               + attn_mask[:, self.start_shift:, :])
                 attention_wts = nn.functional.softmax(attn_logits, dim=1)
-                return torch.cat([h_start, h_end, torch.sum(attention_wts * encoded_input, dim=1)],
-                                 dim=1)
+                attention_term = torch.sum(attention_wts * encoded_input[:, self.start_shift:, :],
+                                           dim=1)
+                return torch.cat([h_start, h_end, attention_term], dim=1)
 
             return torch.cat([h_start, h_end], dim=1)
 
@@ -371,9 +374,9 @@ class Encoder(nn.Module):
 
 
 if __name__ == '__main__':
-    model = Encoder(model='xlnet', model_size='base', use_proj=True).cuda()
+    model = Encoder(model='spanbert', model_size='base', use_proj=False).cuda()
     tokenized_input, input_lengths = model.tokenize_batch(
-        ["Hello unforgiving world!", "What's up"], get_subword_indices=False)
+        ["Hello beautiful world!", "Chomsky says hello."], get_subword_indices=False)
     output = model(tokenized_input)
 
     for idx in range(tokenized_input.shape[0]):
