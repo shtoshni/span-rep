@@ -208,6 +208,7 @@ if __name__ == '__main__':
         checkpoint = torch.load(ckpt_path)
         model.load_state_dict(checkpoint['model'])
         best_model = checkpoint['best_model']
+        best_proj = checkpoint['best_proj']
         best_f1 = checkpoint['best_f1']
         optimizer.load_state_dict(checkpoint['optimizer'])
         lr_controller = checkpoint['lr_controller']
@@ -298,6 +299,7 @@ if __name__ == '__main__':
                 if not_improved_epoch == 0:
                     pass
                 elif not_improved_epoch >= lr_controller.terminate_range:
+                    logger.info('Terminating due to lack of validation improvement.')
                     terminate = True
                 elif not_improved_epoch % lr_controller.weight_decay_range == 0:
                     logger.info(
