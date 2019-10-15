@@ -1,6 +1,8 @@
 import argparse
 import logging
+import numpy as np
 import os
+import time
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -31,92 +33,43 @@ class LearningRateController(object):
         return self.not_improved
 
 
-def validate(data_loader, model):
-    encoder, model = model
+def forward_batch(model, data, valid=False):
+    sents, spans, labels = data
+    with torch.no_grad():
+        output = encoder(sents)
+        span_reprs = get_span_repr(
+            output, spans[:, 0], spans[:, 1] - 1, 
+            method=args.encoding_method
+        )
+    preds = model(span_reprs.detach())
+    if valid:
+        return preds
+    else:
+        loss = nn.BCELoss()(preds, labels.float())
+        return preds, loss
+
+
+def validate(loader, model):
+    # save the random state for recovery
+    rng_state = torch.random.get_rng_state()
+    cuda_rng_state = torch.cuda.random.get_rng_state()
     numerator = denom_p = denom_r = 0
-    for sents, spans, labels in data_loader:
+    for sents, spans, labels in loader:
         if torch.cuda.is_available():
             sents = sents.cuda()
             spans = spans.cuda()
             labels = labels.cuda()
-        # open range: [start_id, end_id)
-        # using close range: [start_id, end_id - 1]
-        output = encoder(sents)
-        span_reprs = get_span_repr(
-            output, spans[:, 0], spans[:, 1] - 1, method=args.encoding_method
-        )
-        preds = (model(span_reprs.detach()) > 0.5).long()
-        num, dp, dr = instance_f1_info(labels, preds)
+        preds = forward_batch(model, (sents, spans, labels), True)
+        pred_labels = (preds > 0.5).long()
+        num, dp, dr = instance_f1_info(labels, pred_labels)
         numerator += num
         denom_p += dp
         denom_r += dr
+    # recover the random state
+    torch.random.set_rng_state(rng_state)
+    torch.cuda.random.set_rng_state(cuda_rng_state)
     return f1_score(numerator, denom_p, denom_r)
 
-
-def train(epoch, data_loader, model, actual_step, optimizer, 
-        best_model_info, logger, lr_controller, args):
-    terminate = False
-    encoder, model = model
-    model.train()
-    best_f1, best_model = best_model_info
-    cummulated_loss = cummulated_num = 0
-    for step, (sents, spans, labels) in enumerate(data_loader['train']):
-        if torch.cuda.is_available():
-            sents = sents.cuda()
-            spans = spans.cuda()
-            labels = labels.cuda()
-        with torch.no_grad():
-            output = encoder(sents)
-            span_reprs = get_span_repr(
-                output, spans[:, 0], spans[:, 1] - 1, 
-                method=args.encoding_method
-            )
-        preds = model(span_reprs.detach())
-        # optimize model
-        loss = nn.BCELoss()(preds, labels.float())
-        loss.backward()
-        optimizer.step()
-        # update metadata
-        cummulated_loss += loss.item() * sents.shape[0]
-        cummulated_num += sents.shape[0]
-        # log
-        if (actual_step + step + 1) % args.log_step == 0:
-            logger.info(
-                f'Epoch #{epoch} | Step {actual_step + step + 1} | '
-                f'loss {cummulated_loss / cummulated_num:8.4f}'
-            )
-        # validate
-        if (actual_step + step + 1) % args.eval_step == 0:
-            model.eval()
-            logger.info('-' * 80)
-            with torch.no_grad():
-                curr_f1 = validate(data_loader['development'], (encoder, model))
-            logger.info(
-                f'Validation '
-                f'F1 {curr_f1 * 100:6.2f}%'
-            )
-            if curr_f1 > best_f1:
-                best_f1 = curr_f1
-                best_model = model.state_dict()
-                logger.info('New best model!')
-            logger.info('-' * 80)
-            model.train()
-            # update validation result
-            not_improved_epoch = lr_controller.add_value(curr_f1)
-            if not_improved_epoch == 0:
-                pass
-            elif not_improved_epoch >= lr_controller.terminate_range:
-                terminate = True
-            elif not_improved_epoch % lr_controller.weight_decay_range == 0:
-                logger.info(
-                    f'Re-initialize learning rate to '
-                    f'{optimizer.param_groups[0]["lr"] / 2.0:.8f}')
-                optimizer = getattr(torch.optim, args.optimizer)(
-                    model.parameters(), lr=optimizer.param_groups[0]['lr'] / 2.0
-                )
-    return best_f1, best_model, actual_step + step, optimizer, \
-        lr_controller, terminate
-        
 
 if __name__ == '__main__':
     # arguments from snippets
@@ -125,28 +78,38 @@ if __name__ == '__main__':
         default='tasks/constituent/data/edges/ontonotes/const/nonterminal')
     parser.add_argument('--model-path', type=str, 
         default='tasks/constituent/checkpoints')
-    parser.add_argument('--model-name', type=str, required=True)
+    parser.add_argument('--model-name', type=str, default='debug')
     parser.add_argument('--batch-size', type=int, default=64)
     parser.add_argument('--epochs', type=int, default=5)
     parser.add_argument('--optimizer', type=str, default='Adam')
     parser.add_argument('--learning-rate', type=float, default=5e-4)
-    parser.add_argument('--log-step', type=int, default=100)
-    parser.add_argument('--eval-step', type=int, default=1000)
+    parser.add_argument('--log-step', type=int, default=10)
+    parser.add_argument('--eval-step', type=int, default=500)
+    parser.add_argument('--seed', type=int, default=1111)
     # slurm supportive snippets 
-    parser.add_argument('--epoch-run', type=int, default=5)
+    parser.add_argument('--time-limit', type=float, default=13800)
     # customized arguments
     parser.add_argument('--hidden-dims', type=int, nargs='+', default=[256])
-    parser.add_argument('--model', type=str, default='bert')
+    parser.add_argument('--model-type', type=str, default='bert')
     parser.add_argument('--model-size', type=str, default='base')
     parser.add_argument('--uncased', action='store_false', dest='cased')
     parser.add_argument('--encoding-method', type=str, default='avg')
+    parser.add_argument('--use-proj', action='store_true', default=False)
+    parser.add_argument('--proj-dim', type=int, default=256)
     args = parser.parse_args()
 
     # save arguments
+    args.start_time = time.time()
     args_save_path = os.path.join(
         args.model_path, args.model_name + '.args.pt'
     )
     torch.save(args, args_save_path)
+
+    # initialize random seeds
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
 
     # configure logger
     logger = logging.getLogger(__name__)
@@ -167,27 +130,48 @@ if __name__ == '__main__':
     logger.addHandler(console)
     logger.propagate = False
     
-    # create data sets, tokenizers, and data loaders    
-    logger.info('Creating datasets.')
-    encoder = Encoder(args.model, args.model_size, args.cased)
-    data_set = dict()
-    data_loader = dict()
-    for split in ['train', 'development', 'test']:
-        data_set[split] = ConstituentDataset(
-            os.path.join(args.data_path, f'{split}.json'),
-            encoder=encoder
+    # create data sets, tokenizers, and data loaders
+    encoder = Encoder(args.model_type, args.model_size, 
+        args.cased, use_proj=args.use_proj, proj_dim=args.proj_dim
+    )
+    data_loader_path = os.path.join(
+        args.model_path, args.model_name + '.loader.pt'
+    )
+    if os.path.exists(data_loader_path):
+        logger.info('Loading datasets.')
+        data_info = torch.load(data_loader_path)
+        data_loader = data_info['data_loader']
+        ConstituentDataset.label_dict = data_info['label_dict']
+        ConstituentDataset.encoder = encoder
+    else:
+        logger.info('Creating datasets.')
+        data_set = dict()
+        data_loader = dict()
+        for split in ['train', 'development', 'test']:
+            data_set[split] = ConstituentDataset(
+                os.path.join(args.data_path, f'{split}.json'),
+                encoder=encoder
+            )
+            data_loader[split] = DataLoader(data_set[split], args.batch_size, 
+                collate_fn=collate_fn, shuffle=(split=='train'))
+        torch.save(
+            {
+                'data_loader': data_loader,
+                'label_dict': ConstituentDataset.label_dict
+            },
+            data_loader_path
         )
-        data_loader[split] = DataLoader(data_set[split], args.batch_size, 
-            collate_fn=collate_fn, shuffle=(split=='train'))
-    
+
     # initialize models: MLP
     logger.info('Initializing models.')
     if args.encoding_method in ['avg', 'max', 'diff']:
-        input_dim = encoder.hidden_size
+        input_dim = args.proj_dim if args.use_proj else encoder.hidden_size
     elif args.encoding_method in ['diff_sum']:
-        input_dim = encoder.hidden_size * 2
+        input_dim = (
+            args.proj_dim if args.use_proj else encoder.hidden_size) * 2
     elif args.encoding_method in ['coherent']:
-        input_dim = encoder.hidden_size // 4 * 2 + 1
+        input_dim = (args.proj_dim if args.use_proj else encoder.hidden_size)\
+            // 4 * 2 + 1
     else:
         raise Exception(
             f'Encoding method {args.encoding_method} not supported.')
@@ -200,57 +184,140 @@ if __name__ == '__main__':
     
     # initialize optimizer
     logger.info('Initializing optimizer.')
+    params = list(model.parameters())
+    if args.use_proj:
+        params += list(encoder.proj.parameters())
     optimizer = getattr(torch.optim, args.optimizer)(
-        model.parameters(), 
-        lr=args.learning_rate
+        params, lr=args.learning_rate
     )
     
     # initialize best model info, and lr controller
-    actual_step = 0
     best_f1 = 0
     best_model = None
+    best_proj = None
     lr_controller = LearningRateController()
 
     # load checkpoint, if exists
-    args.start_epoch = 0
+    args.start_epoch = 0 
+    args.epoch_step = -1
     ckpt_path = os.path.join(
         args.model_path, args.model_name + '.ckpt'
     )
     if os.path.exists(ckpt_path):
+        logger.info(f'Loading checkpoint from {ckpt_path}.')
         checkpoint = torch.load(ckpt_path)
         model.load_state_dict(checkpoint['model'])
-        optimizer.load_state_dict(checkpoint['optimizer'])
         best_model = checkpoint['best_model']
         best_f1 = checkpoint['best_f1']
+        optimizer.load_state_dict(checkpoint['optimizer'])
         lr_controller = checkpoint['lr_controller']
+        torch.cuda.random.set_rng_state(checkpoint['cuda_rng_state'])
         args.start_epoch = checkpoint['epoch']
-        actual_step = checkpoint['step']
+        args.epoch_step = checkpoint['step']
+        if args.use_proj:
+            encoder.proj.load_state_dict(checkpoint['enc_proj'])
+        if lr_controller.not_improved >= lr_controller.terminate_range:
+            logger.info('No more optimization, exiting.')
+            exit(0)
 
     # training
     terminate = False
-    for epoch in range(args.start_epoch, 
-            min(args.epochs, args.epoch_run + args.start_epoch)):
-        best_f1, best_model, actual_step, optimizer, lr_controller, \
-            terminate = train(
-                epoch, data_loader, (encoder, model), actual_step, optimizer,
-                (best_f1, best_model), logger, lr_controller, args
-            )
-        # save checkpoint 
-        torch.save({
-            'model': model.state_dict(),
-            'best_model': best_model,
-            'best_f1': best_f1,
-            'optimizer': optimizer.state_dict(),
-            'epoch': epoch + 1,
-            'lr_controller': lr_controller,
-            'step': actual_step
-        }, ckpt_path)
+    for epoch in range(args.epochs):
+        if terminate:
+            break
+        model.train()
+        cummulated_loss = cummulated_num = 0
+        for step, (sents, spans, labels) in enumerate(data_loader['train']):
+            if terminate:
+                break
+            # ignore batches to recover the same data loader state of checkpoint
+            if (epoch < args.start_epoch) or (epoch == args.start_epoch and \
+                    step <= args.epoch_step):
+                continue
+            if torch.cuda.is_available():
+                sents = sents.cuda()
+                spans = spans.cuda()
+                labels = labels.cuda()
+            preds, loss = forward_batch(model, (sents, spans, labels))
+            # optimize model
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            # update metadata
+            cummulated_loss += loss.item() * sents.shape[0]
+            cummulated_num += sents.shape[0]
+            # log
+            actual_step = len(data_loader['train']) * epoch + step + 1
+            if actual_step % args.log_step == 0:
+                logger.info(
+                    f'Train '
+                    f'Epoch #{epoch} | Step {actual_step} | '
+                    f'loss {cummulated_loss / cummulated_num:8.4f}'
+                )
+            # validate
+            if actual_step % args.eval_step == 0:
+                model.eval()
+                logger.info('-' * 80)
+                with torch.no_grad():
+                    curr_f1 = validate(data_loader['development'], model)
+                logger.info(
+                    f'Validation '
+                    f'F1 {curr_f1 * 100:6.2f}%'
+                )
+                # update when there is a new best model
+                if curr_f1 > best_f1:
+                    best_model_path = os.path.join(
+                        args.model_path, args.model_name + '.best.pt'
+                    )
+                    best_f1 = curr_f1
+                    best_model = model.state_dict()
+                    if args.use_proj:
+                        best_proj = encoder.proj.state_dict()
+                        torch.save((best_model, best_proj), best_model_path)
+                    else:
+                        torch.save(best_model, best_model_path)
+                    logger.info('New best model!')
+                logger.info('-' * 80)
+                model.train()
+                # save checkpoint
+                torch.save({
+                    'model': model.state_dict(),
+                    'best_proj': best_proj,
+                    'best_model': best_model,
+                    'best_f1': best_f1,
+                    'optimizer': optimizer.state_dict(),
+                    'epoch': epoch,
+                    'step': step,
+                    'lr_controller': lr_controller,
+                    'cuda_rng_state': torch.cuda.random.get_rng_state(),
+                    'enc_proj': None if not args.use_proj else \
+                        encoder.proj.state_dict()
+                }, ckpt_path)
+                # update validation result
+                not_improved_epoch = lr_controller.add_value(curr_f1)
+                if not_improved_epoch == 0:
+                    pass
+                elif not_improved_epoch >= lr_controller.terminate_range:
+                    terminate = True
+                elif not_improved_epoch % lr_controller.weight_decay_range == 0:
+                    logger.info(
+                        f'Re-initialize learning rate to '
+                        f'{optimizer.param_groups[0]["lr"] / 2.0:.8f}'
+                    )
+                    optimizer = getattr(torch.optim, args.optimizer)(
+                        params, lr=optimizer.param_groups[0]['lr'] / 2.0
+                    )
+                if (time.time() - args.start_time) >= args.time_limit:
+                    logger.info('Training time is almost up -- terminating.')
+                    exit(0)
 
     # finished training, testing
-    if (args.start_epoch + args.epoch_run == args.epochs) or terminate:
-        assert best_model is not None
-        model.load_state_dict(best_model)
-        model.eval()
-        with torch.no_grad():
-            test_f1 = validate(data_loader['test'], (encoder, model))
-        logger.info(f'Test F1 {test_f1 * 100:6.2f}%')
+    assert best_model is not None
+    assert (not args.use_proj) or (best_proj is not None)
+    model.load_state_dict(best_model)
+    if args.use_proj:
+        encoder.proj.load_state_dict(best_proj)
+    model.eval()
+    with torch.no_grad():
+        test_f1 = validate(data_loader['test'], model)
+    logger.info(f'Test F1 {test_f1 * 100:6.2f}%')
