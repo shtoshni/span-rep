@@ -127,6 +127,16 @@ class Encoder(nn.Module):
         nn.init.constant_(self.attention_params.weight, 0)
 
     def tokenize(self, sentence, get_subword_indices=False, force_split=False):
+        """
+        sentence: A single sentence where the sentence is either a string or list.
+        get_subword_indices: Boolean indicating whether subword indices corresponding to words
+            are needed as an output of tokenization or not. Useful for tagging tasks.
+        force_split: When True splits the string using python's inbuilt split method; otherwise,
+            uses more sophisticated tokenizers if possible.
+
+        Returns: A list of length L, # of tokens, or a pair of L-length lists
+            if get_subword_indices is set to True.
+        """
         tokenizer = self.tokenizer
         subword_to_word_idx = []
 
@@ -187,6 +197,15 @@ class Encoder(nn.Module):
             return final_token_ids, subword_to_word_idx
 
     def tokenize_sentence(self, sentence, get_subword_indices=False, force_split=False):
+        """
+        sentence: A single sentence where the sentence is either a string or list.
+        get_subword_indices: Boolean indicating whether subword indices corresponding to words
+            are needed as an output of tokenization or not. Useful for tagging tasks.
+        force_split: When True splits the string using python's inbuilt split method; otherwise,
+            uses more sophisticated tokenizers if possible.
+
+        Returns: A tensor of size (1 x L) or a pair of (1 x L) tensors if get_subword_indices.
+        """
         output = self.tokenize(
             sentence, get_subword_indices=get_subword_indices,
             force_split=force_split
@@ -199,7 +218,13 @@ class Encoder(nn.Module):
 
     def tokenize_batch(self, list_of_sentences, get_subword_indices=False, force_split=False):
         """
-        sentence: a whole string containing all the tokens (NOT A LIST).
+        list_of_sentences: List of sentences where each sentence is either a string or list.
+        get_subword_indices: Boolean indicating whether subword indices corresponding to words
+            are needed as an output of tokenization or not. Useful for tagging tasks.
+        force_split: When True splits the string using python's inbuilt split method; otherwise,
+            uses more sophisticated tokenizers if possible.
+
+        Returns: Padded tensors of size (B x L) or a pair of (B x L) tensors if get_subword_indices.
         """
         all_token_ids = []
         all_subword_to_word_idx = []
@@ -300,6 +325,12 @@ class Encoder(nn.Module):
                     h_start[:, 2*p_size:3*p_size] * h_end[:, 3*p_size:], dim=1, keepdim=True)
                 return torch.cat(
                     [h_start[:, :p_size], h_end[:, p_size:2*p_size], coherence_term], dim=1)
+            elif method == 'coref':
+                attn_mask = (1 - input_mask) * (-1e10)
+                attn_logits = self.attention_params(encoded_input) + attn_mask
+                attention_wts = nn.functional.softmax(attn_logits, dim=1)
+                return torch.cat([h_start, h_end, torch.sum(attention_wts * encoded_input, dim=1)],
+                                 dim=1)
 
             return torch.cat([h_start, h_end], dim=1)
 
@@ -337,25 +368,6 @@ class Encoder(nn.Module):
             return self.proj(output)
         else:
             return output
-
-    def get_attn_span_repr(self, encoded_input, start_ids, end_ids):
-        """Returns a attention-weighed pooled span representation."""
-        span_mask = get_span_mask(start_ids, end_ids, encoded_input.shape[1])
-        attn_mask = (1 - span_mask) * (-1e10)
-        attn_logits = self.attention_params(encoded_input) + attn_mask
-        attention_wts = nn.functional.softmax(attn_logits, dim=1)
-        return torch.sum(attention_wts * encoded_input, dim=1)
-
-    def get_coref_span_repr(self, encoded_input, start_ids, end_ids):
-        """Returns a attention-weighed pooled span representation concatenated with end points.
-        Introduced by Kenton Lee et al 2017 in End-to-End Coref paper.
-        """
-        attn_term = self.get_attn_span_repr(encoded_input, start_ids, end_ids)
-        batch_size = encoded_input.shape[0]
-        h_start = encoded_input[torch.arange(batch_size), start_ids, :]
-        h_end = encoded_input[torch.arange(batch_size), end_ids, :]
-
-        return torch.cat([h_start, h_end, attn_term], dim=-1)
 
 
 if __name__ == '__main__':
