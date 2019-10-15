@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from encoders import Encoder
+from encoders.pretrained_transformers import Encoder
 from encoders.pretrained_transformers.batched_span_reprs import get_span_repr
 from tasks.constituent.data import ConstituentDataset, collate_fn
 from tasks.constituent.models import MultiLayerPerceptron
@@ -164,7 +164,7 @@ if __name__ == '__main__':
 
     # initialize models: MLP
     logger.info('Initializing models.')
-    if args.encoding_method in ['avg', 'max', 'diff']:
+    if args.encoding_method in ['avg', 'max', 'diff', 'attn']:
         input_dim = args.proj_dim if args.use_proj else encoder.hidden_size
     elif args.encoding_method in ['diff_sum']:
         input_dim = (
