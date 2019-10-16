@@ -22,7 +22,8 @@ def parse_args():
         default="/home/shtoshni/Research/hackathon_2019/tasks/coref/checkpoints")
     parser.add_argument("-batch_size", type=int, default=32)
     parser.add_argument("-eval_batch_size", type=int, default=32)
-    parser.add_argument("-n_epochs", type=int, default=5)
+    parser.add_argument("-eval_steps", type=int, default=3000)
+    parser.add_argument("-n_epochs", type=int, default=15)
     parser.add_argument("-lr", type=float, default=1e-4)
     parser.add_argument("-lr_tune", type=float, default=1e-5)
     parser.add_argument("-span_dim", type=int, default=256)
@@ -41,23 +42,25 @@ def parse_args():
 
 def save_model(model, optimizer, scheduler, steps_done, max_f1, location):
     """Save model."""
-    torch.save({
+    save_dict = {}
+    save_dict['span_nn'] = model.span_nn.state_dict()
+    save_dict['label_net'] = model.label_net.state_dict()
+    save_dict.update({
         'steps_done': steps_done,
         'max_f1': max_f1,
-        'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'scheduler_state_dict': scheduler.state_dict(),
         'rng_state': torch.get_rng_state(),
-    }, location)
+    })
+    torch.save(save_dict, location)
     logging.info("Model saved at: %s" % (location))
 
 
 def train(model, train_iter, val_iter, optimizer, optimizer_tune, scheduler,
-          model_dir, best_model_dir, init_steps=0, num_steps=30000, max_f1=0):
+          model_dir, best_model_dir, init_steps=0, eval_steps=3000, num_steps=30000, max_f1=0):
     model.train()
 
     steps_done = init_steps
-    EVAL_STEPS = 3000
     while (steps_done < num_steps):
         logging.info("Epoch started")
         for idx, batch_data in enumerate(train_iter):
@@ -75,12 +78,12 @@ def train(model, train_iter, val_iter, optimizer, optimizer_tune, scheduler,
 
             steps_done += 1
 
-            if (steps_done % EVAL_STEPS) == 0:
+            if (steps_done % eval_steps) == 0:
                 logging.info("Evaluating at %d" % steps_done)
                 f1 = eval(model, val_iter)
                 logging.info(
                     "Val F1: %.3f Steps (in K): %d Loss: %.3f" %
-                    (f1, steps_done//EVAL_STEPS, loss.item()))
+                    (f1, steps_done//eval_steps, loss.item()))
                 # Scheduler step
                 scheduler.step(f1)
 
@@ -126,7 +129,7 @@ def eval(model, val_iter):
 def get_model_name(hp):
     opt_dict = OrderedDict()
     # Only include important options in hash computation
-    imp_opts = ['model', 'model_size', 'batch_size',
+    imp_opts = ['model', 'model_size', 'batch_size', 'eval_steps',
                 'n_epochs',  'fine_tune', 'span_dim', 'pool_method', 'train_frac',
                 'seed', 'lr', 'lr_tune']
     hp_dict = vars(hp)
@@ -146,7 +149,8 @@ def final_eval(hp, best_model_dir, test_iter):
     if path.exists(location):
         checkpoint = torch.load(location)
         model = CorefModel(**vars(hp)).cuda()
-        model.load_state_dict(checkpoint['model_state_dict'])
+        model.span_nn.load_state_dict(checkpoint['span_nn'])
+        model.label_net.load_state_dict(checkpoint['label_net'])
         max_f1 = checkpoint['max_f1']
         test_f1 = eval(model, test_iter)
 
@@ -193,13 +197,18 @@ def main():
         steps_done = 0
         max_f1 = 0
         num_steps = (hp.n_epochs * len(train_iter.data())) // hp.batch_size
+        # Quantize the number of training steps to eval steps
+        num_steps = (num_steps // hp.eval_steps) * hp.eval_steps
         logging.info("Total training steps: %d" % num_steps)
 
         location = path.join(best_model_path, "model.pt")
         if path.exists(location):
             logging.info("Loading previous checkpoint")
             checkpoint = torch.load(location)
-            model.load_state_dict(checkpoint['model_state_dict'])
+            model.span_nn.load_state_dict(checkpoint['span_nn'])
+            model.label_net.load_state_dict(checkpoint['label_net'])
+            if hp.fine_tune:
+                model.encoder.load_state_dict(checkpoint['encoder'])
             optimizer.load_state_dict(
                 checkpoint['optimizer_state_dict'])
             scheduler.load_state_dict(
@@ -211,7 +220,7 @@ def main():
 
         train(model, train_iter, val_iter, optimizer, optimizer_tune, scheduler,
               model_path, best_model_path, init_steps=steps_done, max_f1=max_f1,
-              num_steps=num_steps)
+              eval_steps=hp.eval_steps, num_steps=num_steps)
 
         final_eval(hp, best_model_path, test_iter)
 

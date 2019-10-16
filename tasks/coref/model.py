@@ -13,9 +13,9 @@ class CorefModel(nn.Module):
         self.pool_method = pool_method
         self.encoder = Encoder(model=model, model_size=model_size, fine_tune=fine_tune,
                                cased=False)
-        self.span_nn = get_span_module(method=pool_method, input_dim=self.encoder.hidden_size,
-                                       use_proj=True, proj_dim=span_dim)
-        self.pooled_dim = self.span_nn.get_output_dim()
+        self.span_net = get_span_module(method=pool_method, input_dim=self.encoder.hidden_size,
+                                        use_proj=True, proj_dim=span_dim)
+        self.pooled_dim = self.span_net.get_output_dim()
 
         self.label_net = nn.Sequential(
             nn.Linear(2 * self.pooled_dim, span_dim),
@@ -48,13 +48,7 @@ class CorefModel(nn.Module):
 
     def calc_span_repr(self, encoded_input, span_indices):
         span_start, span_end = span_indices[:, 0], span_indices[:, 1]
-        # if self.pool_method == "attn":
-        #     span_repr = self.encoder.get_attn_span_repr(encoded_input, span_start, span_end)
-        # elif self.pool_method == "coref":
-        #     span_repr = self.encoder.get_coref_span_repr(encoded_input, span_start, span_end)
-        # else:
-        #     #span_repr = get_span_repr(encoded_input, span_start, span_end, method=self.pool_method)
-        span_repr = self.span_nn(encoded_input, span_start, span_end)
+        span_repr = self.span_net(encoded_input, span_start, span_end)
         return span_repr
 
     def forward(self, batch_data):
@@ -69,6 +63,5 @@ class CorefModel(nn.Module):
         loss = self.training_criterion(pred_label, batch_data.label.cuda().float())
         if self.training:
             return loss
-
         else:
             return loss, pred_label
