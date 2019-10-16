@@ -13,9 +13,14 @@ class CorefModel(nn.Module):
         self.pool_method = pool_method
         self.encoder = Encoder(model=model, model_size=model_size, fine_tune=fine_tune,
                                cased=False)
-        self.span_net = get_span_module(method=pool_method, input_dim=self.encoder.hidden_size,
-                                        use_proj=True, proj_dim=span_dim)
-        self.pooled_dim = self.span_net.get_output_dim()
+        self.span_net = nn.ModuleDict()
+        self.span_net['0'] = get_span_module(
+            method=pool_method, input_dim=self.encoder.hidden_size,
+            use_proj=True, proj_dim=span_dim)
+        self.span_net['1'] = get_span_module(
+            method=pool_method, input_dim=self.encoder.hidden_size,
+            use_proj=True, proj_dim=span_dim)
+        self.pooled_dim = self.span_net['1'].get_output_dim()
 
         self.label_net = nn.Sequential(
             nn.Linear(2 * self.pooled_dim, span_dim),
@@ -46,17 +51,17 @@ class CorefModel(nn.Module):
     def get_core_params(self):
         return self.encoder.model.parameters()
 
-    def calc_span_repr(self, encoded_input, span_indices):
+    def calc_span_repr(self, encoded_input, span_indices, index='0'):
         span_start, span_end = span_indices[:, 0], span_indices[:, 1]
-        span_repr = self.span_net(encoded_input, span_start, span_end)
+        span_repr = self.span_net[index](encoded_input, span_start, span_end)
         return span_repr
 
     def forward(self, batch_data):
         text, text_len = batch_data.text
         encoded_input = self.encoder(text.cuda())
 
-        s1_repr = self.calc_span_repr(encoded_input, batch_data.span1.cuda())
-        s2_repr = self.calc_span_repr(encoded_input, batch_data.span2.cuda())
+        s1_repr = self.calc_span_repr(encoded_input, batch_data.span1.cuda(), index='0')
+        s2_repr = self.calc_span_repr(encoded_input, batch_data.span2.cuda(), index='1')
 
         pred_label = self.label_net(torch.cat([s1_repr, s2_repr], dim=-1))
         pred_label = torch.squeeze(pred_label, dim=-1)

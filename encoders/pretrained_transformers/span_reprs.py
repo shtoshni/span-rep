@@ -181,7 +181,7 @@ def get_span_module(input_dim, method="avg", use_proj=False, proj_dim=256):
     elif method == "diff":
         return DiffSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
     elif method == "diff_sum":
-        return DiffSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
+        return DiffSumSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
     elif method == "coherent":
         return CoherentSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
     elif method == "attn":
