@@ -47,7 +47,7 @@ def parse_args():
 def save_model(model, optimizer, scheduler, steps_done, max_f1, location):
     """Save model."""
     save_dict = {}
-    save_dict['span_nn'] = model.span_nn.state_dict()
+    save_dict['span_net'] = model.span_net.state_dict()
     save_dict['label_net'] = model.label_net.state_dict()
     save_dict.update({
         'steps_done': steps_done,
@@ -153,7 +153,7 @@ def final_eval(hp, best_model_dir, test_iter):
     if path.exists(location):
         checkpoint = torch.load(location)
         model = CorefModel(**vars(hp)).cuda()
-        model.span_nn.load_state_dict(checkpoint['span_nn'])
+        model.span_net.load_state_dict(checkpoint['span_net'])
         model.label_net.load_state_dict(checkpoint['label_net'])
         max_f1 = checkpoint['max_f1']
         test_f1 = eval(model, test_iter)
@@ -210,7 +210,7 @@ def main():
         if path.exists(location):
             logging.info("Loading previous checkpoint")
             checkpoint = torch.load(location)
-            model.span_nn.load_state_dict(checkpoint['span_nn'])
+            model.span_net.load_state_dict(checkpoint['span_net'])
             model.label_net.load_state_dict(checkpoint['label_net'])
             if hp.fine_tune:
                 model.encoder.load_state_dict(checkpoint['encoder'])
