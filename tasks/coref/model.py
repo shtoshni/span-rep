@@ -6,21 +6,23 @@ from encoders.pretrained_transformers.span_reprs import get_span_module
 
 class CorefModel(nn.Module):
     def __init__(self, model='bert', model_size='base',
-                 span_dim=256, pool_method='avg', fine_tune=False,
+                 span_dim=256, pool_method='avg', fine_tune=False, num_spans=1,
                  **kwargs):
         super(CorefModel, self).__init__()
 
         self.pool_method = pool_method
+        self.num_spans = num_spans
         self.encoder = Encoder(model=model, model_size=model_size, fine_tune=fine_tune,
                                cased=False)
         self.span_net = nn.ModuleDict()
         self.span_net['0'] = get_span_module(
             method=pool_method, input_dim=self.encoder.hidden_size,
             use_proj=True, proj_dim=span_dim)
-        self.span_net['1'] = get_span_module(
-            method=pool_method, input_dim=self.encoder.hidden_size,
-            use_proj=True, proj_dim=span_dim)
-        self.pooled_dim = self.span_net['1'].get_output_dim()
+        if num_spans > 1:
+            self.span_net['1'] = get_span_module(
+                method=pool_method, input_dim=self.encoder.hidden_size,
+                use_proj=True, proj_dim=span_dim)
+        self.pooled_dim = self.span_net['0'].get_output_dim()
 
         self.label_net = nn.Sequential(
             nn.Linear(2 * self.pooled_dim, span_dim),
@@ -61,7 +63,10 @@ class CorefModel(nn.Module):
         encoded_input = self.encoder(text.cuda())
 
         s1_repr = self.calc_span_repr(encoded_input, batch_data.span1.cuda(), index='0')
-        s2_repr = self.calc_span_repr(encoded_input, batch_data.span2.cuda(), index='1')
+        if self.num_spans > 1:
+            s2_repr = self.calc_span_repr(encoded_input, batch_data.span2.cuda(), index='1')
+        else:
+            s2_repr = self.calc_span_repr(encoded_input, batch_data.span2.cuda(), index='0')
 
         pred_label = self.label_net(torch.cat([s1_repr, s2_repr], dim=-1))
         pred_label = torch.squeeze(pred_label, dim=-1)

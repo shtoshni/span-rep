@@ -20,11 +20,11 @@ def parse_args():
     parser.add_argument(
         "-model_dir", type=str,
         default="/home/shtoshni/Research/hackathon_2019/tasks/coref/checkpoints")
-    parser.add_argument("-batch_size", type=int, default=32)
+    parser.add_argument("-batch_size", type=int, default=64)
     parser.add_argument("-eval_batch_size", type=int, default=32)
-    parser.add_argument("-eval_steps", type=int, default=3000)
-    parser.add_argument("-n_epochs", type=int, default=15)
-    parser.add_argument("-lr", type=float, default=1e-4)
+    parser.add_argument("-eval_steps", type=int, default=1000)
+    parser.add_argument("-n_epochs", type=int, default=20)
+    parser.add_argument("-lr", type=float, default=5e-4)
     parser.add_argument("-lr_tune", type=float, default=1e-5)
     parser.add_argument("-span_dim", type=int, default=256)
     parser.add_argument("-model", type=str, default="bert")
@@ -44,7 +44,7 @@ def parse_args():
     return hp
 
 
-def save_model(model, optimizer, scheduler, steps_done, max_f1, location):
+def save_model(model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals, location):
     """Save model."""
     save_dict = {}
     save_dict['span_net'] = model.span_net.state_dict()
@@ -52,6 +52,7 @@ def save_model(model, optimizer, scheduler, steps_done, max_f1, location):
     save_dict.update({
         'steps_done': steps_done,
         'max_f1': max_f1,
+        'num_stuck_evals': num_stuck_evals,
         'optimizer_state_dict': optimizer.state_dict(),
         'scheduler_state_dict': scheduler.state_dict(),
         'rng_state': torch.get_rng_state(),
@@ -61,11 +62,13 @@ def save_model(model, optimizer, scheduler, steps_done, max_f1, location):
 
 
 def train(model, train_iter, val_iter, optimizer, optimizer_tune, scheduler,
-          model_dir, best_model_dir, init_steps=0, eval_steps=3000, num_steps=30000, max_f1=0):
+          model_dir, best_model_dir, init_steps=0, eval_steps=1000, num_steps=120000, max_f1=0,
+          init_num_stuck_evals=0):
     model.train()
 
     steps_done = init_steps
-    while (steps_done < num_steps):
+    num_stuck_evals = init_num_stuck_evals
+    while (steps_done < num_steps) and (num_stuck_evals < 20):
         logging.info("Epoch started")
         for idx, batch_data in enumerate(train_iter):
             optimizer.zero_grad()
@@ -86,46 +89,58 @@ def train(model, train_iter, val_iter, optimizer, optimizer_tune, scheduler,
                 logging.info("Evaluating at %d" % steps_done)
                 f1 = eval(model, val_iter)
                 logging.info(
-                    "Val F1: %.3f Steps (in K): %d Loss: %.3f" %
-                    (f1, steps_done//eval_steps, loss.item()))
+                    "Val F1: %.3f Steps: %d (Max F1: %.3f)" %
+                    (f1, steps_done, max_f1))
                 # Scheduler step
                 scheduler.step(f1)
 
                 if f1 > max_f1:
+                    num_stuck_evals = 0
                     max_f1 = f1
                     logging.info("Max F1: %.3f" % max_f1)
                     location = path.join(best_model_dir, "model.pt")
-                    save_model(model, optimizer, scheduler, steps_done, f1, location)
+                    save_model(model, optimizer, scheduler, steps_done, f1, num_stuck_evals, location)
+                else:
+                    num_stuck_evals += 1
 
                 location = path.join(model_dir, "model.pt")
-                save_model(model, optimizer, scheduler, steps_done, f1, location)
+                save_model(model, optimizer, scheduler, steps_done, f1, num_stuck_evals, location)
 
-        logging.info("Epoch done!")
+                if num_stuck_evals >= 20:
+                    logging.info("No improvement for 20 evaluations")
+                    break
+
+        logging.info("Epoch done!\n")
+
+    logging.info("Training done!\n")
 
 
 def eval(model, val_iter):
     model.eval()
-
     tp = 0
     fp = 0
     tn = 0
     fn = 0
-    eps = 1e-8
+
     with torch.no_grad():
         for batch_data in val_iter:
             label = batch_data.label.cuda().float()
             _, pred = model(batch_data)
-            pred = (pred >= 0.5).float()
+            pred = (pred > 0.5).float()
 
             tp += torch.sum(label * pred)
             tn += torch.sum((1 - label) * (1 - pred))
             fp += torch.sum((1 - label) * pred)
             fn += torch.sum(label * (1 - pred))
 
-    recall = tp/(tp + fn + eps)
-    precision = tp/(tp + fp + eps)
+    if tp > 0:
+        recall = tp/(tp + fn)
+        precision = tp/(tp + fp)
 
-    f_score = (2 * recall * precision) / (recall + precision + eps)
+        f_score = (2 * recall * precision) / (recall + precision)
+    else:
+        f_score = 0.0
+
     model.train()
     return f_score
 
@@ -198,9 +213,10 @@ def main():
         optimizer = torch.optim.Adam(model.get_other_params(), lr=hp.lr)
 
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='max', patience=2, factor=0.5)
+            optimizer, mode='max', patience=5, factor=0.5, verbose=True)
         steps_done = 0
         max_f1 = 0
+        init_num_stuck_evals = 0
         num_steps = (hp.n_epochs * len(train_iter.data())) // hp.batch_size
         # Quantize the number of training steps to eval steps
         num_steps = (num_steps // hp.eval_steps) * hp.eval_steps
@@ -219,13 +235,14 @@ def main():
             scheduler.load_state_dict(
                 checkpoint['scheduler_state_dict'])
             steps_done = checkpoint['steps_done']
+            init_num_stuck_evals = checkpoint['num_stuck_evals']
             max_f1 = checkpoint['max_f1']
             torch.set_rng_state(checkpoint['rng_state'])
             logging.info("Steps done: %d, Max F1: %.3f" % (steps_done, max_f1))
 
         train(model, train_iter, val_iter, optimizer, optimizer_tune, scheduler,
               model_path, best_model_path, init_steps=steps_done, max_f1=max_f1,
-              eval_steps=hp.eval_steps, num_steps=num_steps)
+              eval_steps=hp.eval_steps, num_steps=num_steps, init_num_stuck_evals=init_num_stuck_evals)
 
         val_f1, test_f1 = final_eval(hp, best_model_path, test_iter)
         perf_dir = path.join(hp.model_dir, "perf")
