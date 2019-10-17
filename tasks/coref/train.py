@@ -7,6 +7,8 @@ from collections import OrderedDict
 import hashlib
 from os import path
 import os
+import sys
+
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
@@ -47,6 +49,7 @@ def parse_args():
 def save_model(model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals, location):
     """Save model."""
     save_dict = {}
+    save_dict['weighing_params'] = model.encoder.weighing_params
     save_dict['span_net'] = model.span_net.state_dict()
     save_dict['label_net'] = model.label_net.state_dict()
     save_dict.update({
@@ -91,6 +94,10 @@ def train(model, train_iter, val_iter, optimizer, optimizer_tune, scheduler,
                 logging.info(
                     "Val F1: %.3f Steps: %d (Max F1: %.3f)" %
                     (f1, steps_done, max_f1))
+                weighing_params = torch.nn.functional.softmax(
+                    model.encoder.weighing_params, dim=0).tolist()
+                param_str = ['{:.3f}'.format(weight) for weight in weighing_params]
+                logging.info("Layer weights: %s" % param_str)
                 # Scheduler step
                 scheduler.step(f1)
 
@@ -109,6 +116,8 @@ def train(model, train_iter, val_iter, optimizer, optimizer_tune, scheduler,
                 if num_stuck_evals >= 20:
                     logging.info("No improvement for 20 evaluations")
                     break
+
+                sys.stdout.flush()
 
         logging.info("Epoch done!\n")
 
@@ -163,19 +172,20 @@ def get_model_name(hp):
     return model_name
 
 
-def final_eval(hp, best_model_dir, test_iter):
+def final_eval(hp, best_model_dir, val_iter, test_iter):
     location = path.join(best_model_dir, "model.pt")
     if path.exists(location):
         checkpoint = torch.load(location)
         model = CorefModel(**vars(hp)).cuda()
         model.span_net.load_state_dict(checkpoint['span_net'])
         model.label_net.load_state_dict(checkpoint['label_net'])
-        max_f1 = checkpoint['max_f1']
+        model.encoder.weighing_params = checkpoint['weighing_params']
+        val_f1 = eval(model, val_iter)
         test_f1 = eval(model, test_iter)
 
-        logging.info("Val F1: %.3f" % max_f1)
+        logging.info("Val F1: %.3f" % val_f1)
         logging.info("Test F1: %.3f" % test_f1)
-    return (max_f1, test_f1)
+    return (val_f1, test_f1)
 
 
 def main():
@@ -195,6 +205,7 @@ def main():
 
     # Initialize the model
     model = CorefModel(**vars(hp)).cuda()
+    sys.stdout.flush()
 
     # Load data
     logging.info("Loading data")
@@ -226,6 +237,7 @@ def main():
         if path.exists(location):
             logging.info("Loading previous checkpoint")
             checkpoint = torch.load(location)
+            model.encoder.weighing_params = checkpoint['weighing_params']
             model.span_net.load_state_dict(checkpoint['span_net'])
             model.label_net.load_state_dict(checkpoint['label_net'])
             if hp.fine_tune:
@@ -244,7 +256,7 @@ def main():
               model_path, best_model_path, init_steps=steps_done, max_f1=max_f1,
               eval_steps=hp.eval_steps, num_steps=num_steps, init_num_stuck_evals=init_num_stuck_evals)
 
-        val_f1, test_f1 = final_eval(hp, best_model_path, test_iter)
+        val_f1, test_f1 = final_eval(hp, best_model_path, val_iter, test_iter)
         perf_dir = path.join(hp.model_dir, "perf")
         if not path.exists(perf_dir):
             os.makedirs(perf_dir)
