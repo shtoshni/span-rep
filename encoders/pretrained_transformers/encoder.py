@@ -346,12 +346,22 @@ class Encoder(nn.Module):
         input_mask = (batch_ids != self.tokenizer.pad_token_id).cuda().float()
         if 'spanbert' in self.model_name:
             # SpanBERT is based on old APIs
-            encoded_layers = self.model(
-                batch_ids, attention_mask=input_mask)
+            if not self.fine_tune:
+                with torch.no_grad():
+                    encoded_layers = self.model(
+                        batch_ids, attention_mask=input_mask)
+            else:
+                encoded_layers = self.model(
+                    batch_ids, attention_mask=input_mask)
             last_layer_states = encoded_layers[-1]
         else:
-            last_layer_states, _,  encoded_layers = self.model(
-                batch_ids, attention_mask=input_mask)  # B x L x E
+            if not self.fine_tune:
+                with torch.no_grad():
+                    last_layer_states, _,  encoded_layers = self.model(
+                        batch_ids, attention_mask=input_mask)  # B x L x E
+            else:
+                last_layer_states, _,  encoded_layers = self.model(
+                    batch_ids, attention_mask=input_mask)  # B x L x E
             # Encoded layers also has the embedding layer - 0th entry
             encoded_layers = encoded_layers[1:]
 

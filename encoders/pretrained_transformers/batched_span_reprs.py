@@ -1,7 +1,7 @@
 """Different batched non-parametric span representations."""
 import torch
-from encoder import Encoder
-from utils import get_span_mask
+from encoders.pretrained_transformers.encoder import Encoder
+from encoders.pretrained_transformers.utils import get_span_mask
 
 
 def get_diff_repr(encoded_input, start_ids, end_ids):
