@@ -94,7 +94,8 @@ def train(model, train_iter, val_iter, optimizer, scheduler,
                     max_f1 = f1
                     logging.info("Max F1: %.3f" % max_f1)
                     location = path.join(best_model_dir, "model.pt")
-                    save_model(model, optimizer, scheduler, steps_done, f1, num_stuck_evals, location)
+                    save_model(model, optimizer, scheduler, steps_done, f1, num_stuck_evals,
+                               location)
                 else:
                     num_stuck_evals += 1
 
@@ -161,22 +162,6 @@ def get_model_name(hp):
     return model_name
 
 
-def final_eval(hp, best_model_dir, val_iter, test_iter):
-    location = path.join(best_model_dir, "model.pt")
-    if path.exists(location):
-        checkpoint = torch.load(location)
-        model = NERModel(**vars(hp)).cuda()
-        model.span_net.load_state_dict(checkpoint['span_net'])
-        model.label_net.load_state_dict(checkpoint['label_net'])
-        model.encoder.weighing_params = checkpoint['weighing_params']
-        val_f1 = eval(model, val_iter)
-        test_f1 = eval(model, test_iter)
-
-        logging.info("Val F1: %.3f" % val_f1)
-        logging.info("Test F1: %.3f" % test_f1)
-    return (val_f1, test_f1)
-
-
 def main():
     hp = parse_args()
 
@@ -206,53 +191,62 @@ def main():
     model = NERModel(encoder, num_labels=num_labels, **vars(hp)).cuda()
     sys.stdout.flush()
 
-    if hp.eval:
-        final_eval(hp, best_model_path, test_iter)
+    optimizer = torch.optim.Adam(model.get_other_params(), lr=hp.lr)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='max', patience=5, factor=0.5, verbose=True)
+    steps_done = 0
+    max_f1 = 0
+    init_num_stuck_evals = 0
+    num_steps = (hp.n_epochs * len(train_iter.data())) // hp.batch_size
+    # Quantize the number of training steps to eval steps
+    num_steps = (num_steps // hp.eval_steps) * hp.eval_steps
+    logging.info("Total training steps: %d" % num_steps)
+
+    location = path.join(best_model_path, "model.pt")
+    if path.exists(location):
+        logging.info("Loading previous checkpoint")
+        checkpoint = torch.load(location)
+        model.encoder.weighing_params = checkpoint['weighing_params']
+        model.span_net.load_state_dict(checkpoint['span_net'])
+        model.label_net.load_state_dict(checkpoint['label_net'])
+        optimizer.load_state_dict(
+            checkpoint['optimizer_state_dict'])
+        scheduler.load_state_dict(
+            checkpoint['scheduler_state_dict'])
+        steps_done = checkpoint['steps_done']
+        init_num_stuck_evals = checkpoint['num_stuck_evals']
+        max_f1 = checkpoint['max_f1']
+        torch.set_rng_state(checkpoint['rng_state'])
+        logging.info("Steps done: %d, Max F1: %.3f" % (steps_done, max_f1))
+
+    train(model, train_iter, val_iter, optimizer, scheduler,
+          model_path, best_model_path, init_steps=steps_done, max_f1=max_f1,
+          eval_steps=hp.eval_steps, num_steps=num_steps,
+          init_num_stuck_evals=init_num_stuck_evals)
+
+    # load the best model and evaluate
+    location = path.join(best_model_path, "model.pt")
+    if path.exists(location):
+        checkpoint = torch.load(location)
+        model.span_net.load_state_dict(checkpoint['span_net'])
+        model.label_net.load_state_dict(checkpoint['label_net'])
+        model.encoder.weighing_params = checkpoint['weighing_params']
+        val_f1 = eval(model, val_iter)
+        test_f1 = eval(model, test_iter)
+
+        logging.info("Val F1: %.3f" % val_f1)
+        logging.info("Test F1: %.3f" % test_f1)
+
+    perf_dir = path.join(hp.model_dir, "perf")
+    if not path.exists(perf_dir):
+        os.makedirs(perf_dir)
+    if hp.slurm_job_id and hp.slurm_array_id:
+        perf_file = path.join(perf_dir, hp.slurm_job_id + "_" + hp.slurm_array_id + ".txt")
     else:
-        optimizer = torch.optim.Adam(model.get_other_params(), lr=hp.lr)
-
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='max', patience=5, factor=0.5, verbose=True)
-        steps_done = 0
-        max_f1 = 0
-        init_num_stuck_evals = 0
-        num_steps = (hp.n_epochs * len(train_iter.data())) // hp.batch_size
-        # Quantize the number of training steps to eval steps
-        num_steps = (num_steps // hp.eval_steps) * hp.eval_steps
-        logging.info("Total training steps: %d" % num_steps)
-
-        location = path.join(best_model_path, "model.pt")
-        if path.exists(location):
-            logging.info("Loading previous checkpoint")
-            checkpoint = torch.load(location)
-            model.encoder.weighing_params = checkpoint['weighing_params']
-            model.span_net.load_state_dict(checkpoint['span_net'])
-            model.label_net.load_state_dict(checkpoint['label_net'])
-            optimizer.load_state_dict(
-                checkpoint['optimizer_state_dict'])
-            scheduler.load_state_dict(
-                checkpoint['scheduler_state_dict'])
-            steps_done = checkpoint['steps_done']
-            init_num_stuck_evals = checkpoint['num_stuck_evals']
-            max_f1 = checkpoint['max_f1']
-            torch.set_rng_state(checkpoint['rng_state'])
-            logging.info("Steps done: %d, Max F1: %.3f" % (steps_done, max_f1))
-
-        train(model, train_iter, val_iter, optimizer, scheduler,
-              model_path, best_model_path, init_steps=steps_done, max_f1=max_f1,
-              eval_steps=hp.eval_steps, num_steps=num_steps, init_num_stuck_evals=init_num_stuck_evals)
-
-        val_f1, test_f1 = final_eval(hp, best_model_path, val_iter, test_iter)
-        perf_dir = path.join(hp.model_dir, "perf")
-        if not path.exists(perf_dir):
-            os.makedirs(perf_dir)
-        if hp.slurm_job_id and hp.slurm_array_id:
-            perf_file = path.join(perf_dir, hp.slurm_job_id + "_" + hp.slurm_array_id + ".txt")
-        else:
-            perf_file = path.join(model_path, "perf.txt")
-        with open(perf_file, "w") as f:
-            f.write("%s\t%.4f\n" % ("Valid", val_f1))
-            f.write("%s\t%.4f\n" % ("Test", test_f1))
+        perf_file = path.join(model_path, "perf.txt")
+    with open(perf_file, "w") as f:
+        f.write("%s\t%.4f\n" % ("Valid", val_f1))
+        f.write("%s\t%.4f\n" % ("Test", test_f1))
 
 
 if __name__ == '__main__':
