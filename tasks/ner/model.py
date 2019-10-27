@@ -1,68 +1,67 @@
 import torch
 import torch.nn as nn
-from encoder import Encoder
+from encoders.pretrained_transformers.span_reprs import get_span_module
 
 
-class Net(nn.Module):
-    def __init__(self, model='bert', model_size='base', top_rnns=False,
-                 vocab_size=None, device='cpu', finetuning=False):
-        super().__init__()
-        self.encoder = Encoder(model=model, model_size=model_size,
-                               fine_tune=finetuning)
-        self.finetuning = finetuning
+class NERModel(nn.Module):
+    def __init__(self, encoder,
+                 span_dim=256, pool_method='avg', num_labels=1,
+                 **kwargs):
+        super(NERModel, self).__init__()
+        self.encoder = encoder
+        self.pool_method = pool_method
+        self.span_net = nn.ModuleDict()
+        self.span_net['0'] = get_span_module(
+            method=pool_method, input_dim=self.encoder.hidden_size,
+            use_proj=True, proj_dim=span_dim)
+        self.pooled_dim = self.span_net['0'].get_output_dim()
 
-        self.other_params = []
-        self.top_rnns = top_rnns
-        hidden_size = self.encoder.hidden_size
-        if top_rnns:
-            self.rnn = nn.LSTM(
-                bidirectional=True, num_layers=2,
-                input_size=hidden_size, hidden_size=hidden_size//2, batch_first=True)
-            self.other_params += self.rnn.parameters()
-        self.fc = nn.Linear(hidden_size, vocab_size)
-        self.other_params += self.fc.parameters()
+        self.label_net = nn.Sequential(
+            nn.Linear(self.pooled_dim, span_dim),
+            nn.Tanh(),
+            nn.LayerNorm(span_dim),
+            nn.Dropout(0.2),
+            nn.Linear(span_dim, num_labels),
+            nn.Sigmoid()
+        )
 
-        self.device = device
-        self.finetuning = finetuning
+        self.training_criterion = nn.BCELoss()
 
-    def forward(self, x, y, ):
-        '''
-        x: (N, T). int64
-        y: (N, T). int64
-
-        Returns
-        enc: (N, T, VOCAB)
-        '''
-        x = x.to(self.device)
-        y = y.to(self.device)
-
-        if self.training:
-            self.encoder.train()
-            if self.finetuning:
-                enc = self.encoder(x, just_last_layer=False)
-            else:
-                # Just train the attention over the layers parameter
-                enc = self.encoder(x, just_last_layer=False)
-        else:
-            self.encoder.eval()
-            with torch.no_grad():
-                enc = self.encoder(x, just_last_layer=False)
-
-        if self.top_rnns:
-            enc, _ = self.rnn(enc)
-        logits = self.fc(enc)
-        y_hat = logits.argmax(-1)
-        return logits, y, y_hat
-
-    def print_model_info(self):
-        """Prints model parameters and their total count"""
-        total_params = 0
-        for name, param in self.named_parameters():
+    def get_other_params(self):
+        core_encoder_param_names = set()
+        for name, param in self.encoder.model.named_parameters():
             if param.requires_grad:
-                dims = list(param.data.size())
-                local_params = 1
-                for dim in dims:
-                    local_params *= dim
-                total_params += local_params
+                core_encoder_param_names.add(name)
+
+        other_params = []
+        print("\nParams outside core transformer params:\n")
+        for name, param in self.named_parameters():
+            if param.requires_grad and name not in core_encoder_param_names:
                 print(name, param.data.size())
-        print("\nTotal Params:{:.2f} (in millions)".format(total_params/10**6))
+                other_params.append(param)
+        print("\n")
+        return other_params
+
+    def get_core_params(self):
+        return self.encoder.model.parameters()
+
+    def calc_span_repr(self, encoded_input, span_indices, index='0'):
+        span_start, span_end = span_indices[:, 0], span_indices[:, 1]
+        span_repr = self.span_net[index](encoded_input, span_start, span_end)
+        return span_repr
+
+    def forward(self, batch_data):
+        text, text_len = batch_data.text
+        encoded_input = self.encoder(text.cuda())
+
+        s_repr = self.calc_span_repr(encoded_input, batch_data.span.cuda())
+        pred_label = self.label_net(s_repr)
+
+        label = torch.zeros_like(pred_label)
+        label.scatter_(1, batch_data.label.cuda().unsqueeze(dim=1), 1)
+        label = label.cuda().float()
+        loss = self.training_criterion(pred_label, label)
+        if self.training:
+            return loss
+        else:
+            return loss, pred_label, label

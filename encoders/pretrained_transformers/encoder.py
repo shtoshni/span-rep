@@ -27,6 +27,7 @@ class Encoder(nn.Module):
         self.tokenizer = None
         self.num_layers = None
         self.hidden_size = None
+        self.fine_tune = fine_tune
 
         # First initialize the model and tokenizer
         model_name = ''

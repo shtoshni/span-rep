@@ -1,240 +1,259 @@
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils import data
-from model import Net
-from data_load import NerDataset, pad, VOCAB, idx2tag
+import argparse
+from model import NERModel
+from data import NERDataset
+import logging
+from collections import OrderedDict
+import hashlib
+from os import path
 import os
 import sys
-from os import path
-import numpy as np
-import argparse
-import subprocess
-import re
-import hashlib
-from collections import OrderedDict
-from transformers import WarmupLinearSchedule, WarmupConstantSchedule
+
+from encoders.pretrained_transformers import Encoder
 
 
-import logging
-logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
+logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
 
-def train(model, iterator, optimizer, optimizer_add, scheduler, scheduler_add,
-          criterion, tokenizer, max_gradient_norm=1.0):
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-data_dir", type=str,
+        default="/home/shtoshni/Research/hackathon_2019/tasks/ner/data")
+    parser.add_argument(
+        "-model_dir", type=str,
+        default="/home/shtoshni/Research/hackathon_2019/tasks/ner/checkpoints")
+    parser.add_argument("-batch_size", type=int, default=32)
+    parser.add_argument("-eval_batch_size", type=int, default=32)
+    parser.add_argument("-eval_steps", type=int, default=1000)
+    parser.add_argument("-n_epochs", type=int, default=20)
+    parser.add_argument("-lr", type=float, default=5e-4)
+    parser.add_argument("-span_dim", type=int, default=256)
+    parser.add_argument("-model", type=str, default="bert")
+    parser.add_argument("-model_size", type=str, default="base")
+    parser.add_argument("-pool_method", default="avg", type=str)
+    parser.add_argument("-train_frac", default=1.0, type=float,
+                        help="Can reduce this for quick testing.")
+    parser.add_argument("-seed", type=int, default=0, help="Random seed")
+    parser.add_argument("-eval", default=False, action="store_true")
+    parser.add_argument('-slurm_job_id', help="Slurm Array Job ID",
+                        default=None, type=str)
+    parser.add_argument('-slurm_array_id', help="Slurm Array Task ID",
+                        default=None, type=str)
+
+    hp = parser.parse_args()
+    return hp
+
+
+def save_model(model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals, location):
+    """Save model."""
+    save_dict = {}
+    save_dict['weighing_params'] = model.encoder.weighing_params
+    save_dict['span_net'] = model.span_net.state_dict()
+    save_dict['label_net'] = model.label_net.state_dict()
+    save_dict.update({
+        'steps_done': steps_done,
+        'max_f1': max_f1,
+        'num_stuck_evals': num_stuck_evals,
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'rng_state': torch.get_rng_state(),
+    })
+    torch.save(save_dict, location)
+    logging.info("Model saved at: %s" % (location))
+
+
+def train(model, train_iter, val_iter, optimizer, scheduler,
+          model_dir, best_model_dir, init_steps=0, eval_steps=1000, num_steps=120000, max_f1=0,
+          init_num_stuck_evals=0):
     model.train()
-    for i, batch in enumerate(iterator):
-        words, x, is_heads, tags, y, seqlens = batch
-        _y = y  # for monitoring
-        optimizer.zero_grad()
-        optimizer_add.zero_grad()
-        logits, y, _ = model(x, y)  # logits: (N, T, VOCAB), y: (N, T)
 
-        logits = logits.view(-1, logits.shape[-1])  # (N*T, VOCAB)
-        y = y.view(-1)  # (N*T,)
+    steps_done = init_steps
+    num_stuck_evals = init_num_stuck_evals
+    while (steps_done < num_steps) and (num_stuck_evals < 20):
+        logging.info("Epoch started")
+        for idx, batch_data in enumerate(train_iter):
+            optimizer.zero_grad()
+            loss = model(batch_data)
+            loss.backward()
 
-        loss = criterion(logits, y)
-        loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(), 5.0)
 
-        torch.nn.utils.clip_grad_norm_(
-            model.parameters(), max_gradient_norm)
+            optimizer.step()
+            steps_done += 1
 
-        optimizer.step()
-        optimizer_add.step()
-        scheduler.step()
-        scheduler_add.step()
+            if (steps_done % eval_steps) == 0:
+                logging.info("Evaluating at %d" % steps_done)
+                f1 = eval(model, val_iter)
+                # Scheduler step
+                scheduler.step(f1)
 
-        if i == 0:
-            print("=====sanity check======")
-            print("words:", words[0])
-            print("x:", x.cpu().numpy()[0][:seqlens[0]])
-            print("tokens:", tokenizer.convert_ids_to_tokens(x.tolist()[0])[:seqlens[0]])
-            print("is_heads:", is_heads[0])
-            print("y:", _y.cpu().numpy()[0][:seqlens[0]])
-            print("tags:", tags[0])
-            print("seqlen:", seqlens[0])
-            print("=======================")
+                if f1 > max_f1:
+                    num_stuck_evals = 0
+                    max_f1 = f1
+                    logging.info("Max F1: %.3f" % max_f1)
+                    location = path.join(best_model_dir, "model.pt")
+                    save_model(model, optimizer, scheduler, steps_done, f1, num_stuck_evals, location)
+                else:
+                    num_stuck_evals += 1
 
-        if i % 50 == 0:  # monitoring
-            logging.info(f"step: {i}, loss: {loss.item()}")
-            sys.stdout.flush()
+                location = path.join(model_dir, "model.pt")
+                save_model(model, optimizer, scheduler, steps_done, f1, num_stuck_evals, location)
+
+                logging.info("Val F1: %.3f Steps: %d (Max F1: %.3f)" % (f1, steps_done, max_f1))
+
+                if num_stuck_evals >= 20:
+                    logging.info("No improvement for 20 evaluations")
+                    break
+
+                sys.stdout.flush()
+
+        logging.info("Epoch done!\n")
+
+    logging.info("Training done!\n")
 
 
-def eval(model, iterator, f, model_path):
+def eval(model, val_iter):
     model.eval()
+    tp = 0
+    fp = 0
+    tn = 0
+    fn = 0
 
-    Words, Is_heads, Tags, Y, Y_hat = [], [], [], [], []
     with torch.no_grad():
-        for i, batch in enumerate(iterator):
-            words, x, is_heads, tags, y, seqlens = batch
+        for batch_data in val_iter:
+            _, pred, label = model(batch_data)
+            pred = (pred > 0.5).float()
 
-            _, _, y_hat = model(x, y)  # y_hat: (N, T)
+            tp += torch.sum(label * pred)
+            tn += torch.sum((1 - label) * (1 - pred))
+            fp += torch.sum((1 - label) * pred)
+            fn += torch.sum(label * (1 - pred))
 
-            Words.extend(words)
-            Is_heads.extend(is_heads)
-            Tags.extend(tags)
-            Y.extend(y.numpy().tolist())
-            Y_hat.extend(y_hat.cpu().numpy().tolist())
+    if tp > 0:
+        recall = tp/(tp + fn)
+        precision = tp/(tp + fp)
 
-    # gets results and save
-    temp1_file = path.join(model_path, "temp")
-    temp2_file = path.join(model_path, "temp_2")
-    with open(temp1_file, 'w') as fout, open(temp2_file, 'w') as fout_2:
-        for words, is_heads, tags, y_hat in zip(Words, Is_heads, Tags, Y_hat):
-            y_hat = [hat for head, hat in zip(is_heads, y_hat) if head == 1]
-            preds = [idx2tag[hat] for hat in y_hat]
-            assert len(preds) == len(words.split()) == len(tags.split())
-            start_idx = model.encoder.start_shift
-            end_idx = model.encoder.end_shift
-            for w, t, p in zip(words.split()[start_idx:-end_idx],
-                               tags.split()[start_idx:-end_idx],
-                               preds[start_idx:-end_idx]):
-                fout.write(f"{w} {t} {p}\n")
-                fout_2.write(f"{t} {p}\n")
-            fout.write("\n")
-            fout_2.write("\n")
+        f_score = (2 * recall * precision) / (recall + precision)
+    else:
+        f_score = 0.0
 
-    eval_proc = subprocess.Popen(['conlleval'], stdin=open(temp2_file),
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = eval_proc.communicate()
-
-    full_log = stdout.decode('ascii')
-    line = full_log.split('\n')[1].strip()
-    if not line.startswith('accuracy'):
-        raise ValueError(f'conlleval script gave bad output\n{stdout}')
-
-    f1 = float(re.search('\S+$', line).group(0))
-    print(f'F1: {f1}')
-
-    final = f + ".F%.3f_full_log" % (f1)
-    final_2 = f + ".F%.3f" % (f1)
-    with open(final, 'w') as fout, open(final_2, 'w') as fout_2:
-        result = open(temp1_file, "r").read()
-        fout.write(f"{result}\n")
-        fout.write(f"{full_log}")
-
-        result = open(temp2_file, "r").read()
-        fout_2.write(f"{result}")
-
-    os.remove(temp1_file)
-    os.remove(temp2_file)
-    return f1
+    model.train()
+    return f_score
 
 
 def get_model_name(hp):
     opt_dict = OrderedDict()
     # Only include important options in hash computation
-    imp_opts = ['model', 'model_size', 'batch_size',
-                'n_epochs',  'finetuning', 'top_rnns',
-                'seed', 'lr', 'lr_add']
-    for key, val in vars(hp).items():
-        if key in imp_opts:
-            opt_dict[key] = val
-            print("%s\t%s" % (key, val))
+    imp_opts = ['model', 'model_size', 'batch_size', 'eval_steps',
+                'n_epochs',  'span_dim', 'pool_method', 'train_frac',
+                'seed', 'lr']
+    hp_dict = vars(hp)
+    for key in imp_opts:
+        val = hp_dict[key]
+        opt_dict[key] = val
+        logging.info("%s\t%s" % (key, val))
 
     str_repr = str(opt_dict.items())
     hash_idx = hashlib.md5(str_repr.encode("utf-8")).hexdigest()
-    model_name = "ner_" + str(hash_idx)
+    model_name = "coref_" + str(hash_idx)
     return model_name
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-batch_size", type=int, default=32)
-    parser.add_argument("-lr", type=float, default=1e-5)
-    parser.add_argument("-lr_add", type=float, default=2e-4)
-    parser.add_argument("-n_epochs", type=int, default=10)
-    parser.add_argument("-model", type=str, default='bert')
-    parser.add_argument("-model_size", type=str, default='base')
-    parser.add_argument("-finetuning", dest="finetuning", action="store_true")
-    parser.add_argument("-top_rnns", dest="top_rnns", action="store_true")
-    parser.add_argument("-logdir", type=str, default="checkpoints")
-    parser.add_argument("-datadir", type=str,
-                        default="/home/shtoshni/Research/hackathon_2019/tasks/ner/conll2003")
-    parser.add_argument("-seed", type=int, default=0, help="Random seed.")
-    hp = parser.parse_args()
+def final_eval(hp, best_model_dir, val_iter, test_iter):
+    location = path.join(best_model_dir, "model.pt")
+    if path.exists(location):
+        checkpoint = torch.load(location)
+        model = NERModel(**vars(hp)).cuda()
+        model.span_net.load_state_dict(checkpoint['span_net'])
+        model.label_net.load_state_dict(checkpoint['label_net'])
+        model.encoder.weighing_params = checkpoint['weighing_params']
+        val_f1 = eval(model, val_iter)
+        test_f1 = eval(model, test_iter)
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        logging.info("Val F1: %.3f" % val_f1)
+        logging.info("Test F1: %.3f" % test_f1)
+    return (val_f1, test_f1)
 
-    torch.manual_seed(hp.seed)
-    np.random.seed(hp.seed)
-    model = Net(model=hp.model, model_size=hp.model_size,
-                top_rnns=hp.top_rnns, vocab_size=len(VOCAB),
-                device=device, finetuning=hp.finetuning).cuda()
+
+def main():
+    hp = parse_args()
+
+    # Setup model directories
     model_name = get_model_name(hp)
-    model_path = path.join(hp.logdir, model_name)
+    model_path = path.join(hp.model_dir, model_name)
     best_model_path = path.join(model_path, 'best_models')
     if not path.exists(model_path):
         os.makedirs(model_path)
     if not path.exists(best_model_path):
         os.makedirs(best_model_path)
 
-    config_file = path.join(model_path, "config.txt")
-    with open(config_file, 'w') as f:
-        for key, val in vars(hp).items():
-            if "dir" not in key:
-                f.write(str(key) + "\t" + str(val) + "\n")
+    # Set random seed
+    torch.manual_seed(hp.seed)
 
-    train_dataset = NerDataset(path.join(hp.datadir, "train.txt"), model.encoder)
-    eval_dataset = NerDataset(path.join(hp.datadir, "valid.txt"), model.encoder)
-    test_dataset = NerDataset(path.join(hp.datadir, "test.txt"), model.encoder)
+    # Hacky way of assigning the number of labels.
+    encoder = Encoder(model=hp.model, model_size=hp.model_size, fine_tune=False,
+                      cased=True)
+    # Load data
+    logging.info("Loading data")
+    train_iter, val_iter, test_iter, num_labels = NERDataset.iters(
+        hp.data_dir, encoder, batch_size=hp.batch_size,
+        eval_batch_size=hp.eval_batch_size, train_frac=hp.train_frac)
+    logging.info("Data loaded")
 
-    tokenizer = model.encoder.tokenizer
+    # Initialize the model
+    model = NERModel(encoder, num_labels=num_labels, **vars(hp)).cuda()
+    sys.stdout.flush()
 
-    train_iter = data.DataLoader(
-        dataset=train_dataset, batch_size=hp.batch_size,
-        shuffle=True, num_workers=4, collate_fn=pad)
-    eval_iter = data.DataLoader(
-        dataset=eval_dataset, batch_size=hp.batch_size,
-        shuffle=False, num_workers=4, collate_fn=pad)
-    test_iter = data.DataLoader(
-        dataset=test_dataset, batch_size=hp.batch_size,
-        shuffle=False, num_workers=4, collate_fn=pad)
+    if hp.eval:
+        final_eval(hp, best_model_path, test_iter)
+    else:
+        optimizer = torch.optim.Adam(model.get_other_params(), lr=hp.lr)
 
-    optimizer = optim.AdamW(model.encoder.parameters(), lr=hp.lr, weight_decay=0.0)
-    optimizer_add = optim.AdamW(model.other_params, lr=hp.lr_add, weight_decay=0.0)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='max', patience=5, factor=0.5, verbose=True)
+        steps_done = 0
+        max_f1 = 0
+        init_num_stuck_evals = 0
+        num_steps = (hp.n_epochs * len(train_iter.data())) // hp.batch_size
+        # Quantize the number of training steps to eval steps
+        num_steps = (num_steps // hp.eval_steps) * hp.eval_steps
+        logging.info("Total training steps: %d" % num_steps)
 
-    num_train_steps = (hp.n_epochs * len(train_dataset.sents))//hp.batch_size
-    warmup_steps = 0  #.1 * num_train_steps
-    # scheduler = WarmupConstantSchedule(
-    #     optimizer, warmup_steps=warmup_steps, t_total=num_train_steps)
-    # scheduler_add = WarmupConstantSchedule(
-    #     optimizer_add, warmup_steps=warmup_steps, t_total=num_train_steps)
-    scheduler = WarmupConstantSchedule(optimizer, warmup_steps=warmup_steps)
-    scheduler_add = WarmupConstantSchedule(optimizer_add, warmup_steps=warmup_steps)
+        location = path.join(best_model_path, "model.pt")
+        if path.exists(location):
+            logging.info("Loading previous checkpoint")
+            checkpoint = torch.load(location)
+            model.encoder.weighing_params = checkpoint['weighing_params']
+            model.span_net.load_state_dict(checkpoint['span_net'])
+            model.label_net.load_state_dict(checkpoint['label_net'])
+            optimizer.load_state_dict(
+                checkpoint['optimizer_state_dict'])
+            scheduler.load_state_dict(
+                checkpoint['scheduler_state_dict'])
+            steps_done = checkpoint['steps_done']
+            init_num_stuck_evals = checkpoint['num_stuck_evals']
+            max_f1 = checkpoint['max_f1']
+            torch.set_rng_state(checkpoint['rng_state'])
+            logging.info("Steps done: %d, Max F1: %.3f" % (steps_done, max_f1))
 
-    criterion = nn.CrossEntropyLoss(ignore_index=0)
+        train(model, train_iter, val_iter, optimizer, scheduler,
+              model_path, best_model_path, init_steps=steps_done, max_f1=max_f1,
+              eval_steps=hp.eval_steps, num_steps=num_steps, init_num_stuck_evals=init_num_stuck_evals)
 
-    max_f1 = 0
-    for epoch in range(1, hp.n_epochs+1):
-        if epoch == 1:
-            print("\n%s\n" % model_path)
-            model.print_model_info()
-        train(model, train_iter, optimizer, optimizer_add, scheduler,
-              scheduler_add, criterion, tokenizer)
+        val_f1, test_f1 = final_eval(hp, best_model_path, val_iter, test_iter)
+        perf_dir = path.join(hp.model_dir, "perf")
+        if not path.exists(perf_dir):
+            os.makedirs(perf_dir)
+        if hp.slurm_job_id and hp.slurm_array_id:
+            perf_file = path.join(perf_dir, hp.slurm_job_id + "_" + hp.slurm_array_id + ".txt")
+        else:
+            perf_file = path.join(model_path, "perf.txt")
+        with open(perf_file, "w") as f:
+            f.write("%s\t%.4f\n" % ("Valid", val_f1))
+            f.write("%s\t%.4f\n" % ("Test", test_f1))
 
-        print(f"=========eval at epoch={epoch}=========")
-        fname = os.path.join(model_path, "model")
-        f1 = eval(model, eval_iter, fname, model_path)
 
-        if max_f1 < f1:
-            max_f1 = f1
-            best_fname = os.path.join(best_model_path, "model")
-            torch.save(model.state_dict(), f"{best_fname}.pt")
-            print(f"weights were saved to {best_fname}.pt")
-
-        torch.save(model.state_dict(), f"{fname}.pt")
-        print(f"weights were saved to {fname}.pt")
-        sys.stdout.flush()
-
-    print(f"Max F1 {max_f1}")
-    # Load the best model again
-    print("Loading best model to evaluate on test data")
-    model.load_state_dict(torch.load(f"{best_fname}.pt"))
-    test_f1 = eval(model, test_iter, fname, model_path)
-    print(f"Test F1 {test_f1}")
-
-    summary_file = path.join(model_path, "final_report.txt")
-    with open(summary_file, 'w') as f:
-        f.write("Val F1: %.3f\n" % max_f1)
-        f.write("Test F1: %.3f\n" % test_f1)
+if __name__ == '__main__':
+    main()
