@@ -252,7 +252,7 @@ def main():
     logging.info("Data loaded")
 
     if hp.eval:
-        final_eval(hp, best_model_path, test_iter)
+        final_eval(hp, best_model_path, val_iter, test_iter)
     else:
         optimizer_tune = None
         if hp.fine_tune:
@@ -302,6 +302,7 @@ def main():
         else:
             perf_file = path.join(model_path, "perf.txt")
         with open(perf_file, "w") as f:
+            f.write("%s\n" % (model_path))
             f.write("%s\t%.4f\n" % ("Valid", val_f1))
             f.write("%s\t%.4f\n" % ("Test", test_f1))
 
