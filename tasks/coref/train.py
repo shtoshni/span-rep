@@ -90,7 +90,7 @@ def train(model, train_iter, val_iter, optimizer, optimizer_tune, scheduler,
 
             if (steps_done % eval_steps) == 0:
                 logging.info("Evaluating at %d" % steps_done)
-                f1 = eval(model, val_iter)
+                f1, _ = eval(model, val_iter)
                 logging.info(
                     "Val F1: %.3f Steps: %d (Max F1: %.3f)" %
                     (f1, steps_done, max_f1))
@@ -131,6 +131,7 @@ def eval(model, val_iter):
     tn = 0
     fn = 0
 
+    all_res = []
     with torch.no_grad():
         for batch_data in val_iter:
             label = batch_data.label.cuda().float()
@@ -142,6 +143,16 @@ def eval(model, val_iter):
             fp += torch.sum((1 - label) * pred)
             fn += torch.sum(label * (1 - pred))
 
+            batch_size = label.shape[0]
+            span1 = batch_data.span1
+            span2 = batch_data.span2
+            for idx in range(batch_size):
+                all_res.append({'span1': span1[idx, :].tolist(),
+                                'span2': span2[idx, :].tolist(),
+                                'pred': pred[idx],
+                                'label': label[idx],
+                                'corr': pred[idx] == label[idx]})
+
     if tp > 0:
         recall = tp/(tp + fn)
         precision = tp/(tp + fp)
@@ -151,7 +162,7 @@ def eval(model, val_iter):
         f_score = 0.0
 
     model.train()
-    return f_score
+    return f_score, all_res
 
 
 def get_model_name(hp):
@@ -172,16 +183,42 @@ def get_model_name(hp):
     return model_name
 
 
+def write_res(all_res, output_file):
+    with open(output_file, 'w') as f:
+        f.write('s1_width\ts2_width\tmax_width\tspan_sep\tpred\tlabel\tcorr\n')
+        for res in all_res:
+            span1, span2, pred, label, corr = (res['span1'], res['span2'], res['pred'],
+                                               res['label'], res['corr'])
+            # End points of the spans are included, hence the +1 in width calc
+            s1_width = span1[1] - span1[0] + 1
+            s2_width = span2[1] - span2[0] + 1
+            max_width = max(s1_width, s2_width)
+            # Subtract the endpoint of one span from the start point of the other.
+            # One term would be -ve and the other term would be our answer. Hence, the max.
+            span_sep = max(span1[0] - span2[1] - 1, span2[0] - span1[1] - 1)
+            # But sometimes the span can overlap as well. So just to safeguard against that.
+            span_sep = max(span_sep, 0)
+
+            f.write('%d\t%d\t%d\t%d\t%d\t%d\t%d\n' % (
+                s1_width, s2_width, max_width, span_sep, pred, label, corr))
+
+
 def final_eval(hp, best_model_dir, val_iter, test_iter):
     location = path.join(best_model_dir, "model.pt")
+    model_dir = path.dirname(best_model_dir)
     if path.exists(location):
         checkpoint = torch.load(location)
         model = CorefModel(**vars(hp)).cuda()
         model.span_net.load_state_dict(checkpoint['span_net'])
         model.label_net.load_state_dict(checkpoint['label_net'])
         model.encoder.weighing_params = checkpoint['weighing_params']
-        val_f1 = eval(model, val_iter)
-        test_f1 = eval(model, test_iter)
+        val_f1, val_res = eval(model, val_iter)
+        val_file = path.join(model_dir, "val_log.tsv")
+        write_res(val_res, val_file)
+
+        test_f1, test_res = eval(model, test_iter)
+        test_file = path.join(model_dir, "test_log.tsv")
+        write_res(test_res, test_file)
 
         logging.info("Val F1: %.3f" % val_f1)
         logging.info("Test F1: %.3f" % test_f1)
