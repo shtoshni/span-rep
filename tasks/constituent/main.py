@@ -71,6 +71,30 @@ def validate(loader, model):
     return f1_score(numerator, denom_p, denom_r)
 
 
+def analysis(loader, model): 
+    import numpy as np  
+    numerator = np.zeros(1000) 
+    denom_p = np.zeros(1000) 
+    denom_r = np.zeros(1000) 
+    for sents, spans, labels in loader: 
+        if torch.cuda.is_available(): 
+            sents = sents.cuda() 
+            spans = spans.cuda() 
+            labels = labels.cuda() 
+        preds = forward_batch(model, (sents, spans, labels), True) 
+        pred_labels = (preds > 0.5).long() 
+        eqs = pred_labels * labels 
+        for i in range(spans.shape[0]): 
+            length = (spans[i][1] - spans[i][0] + 1).item() 
+            num = eqs[i].sum() 
+            dp = pred_labels[i].sum() 
+            dr = labels[i].sum() 
+            numerator[length] += num 
+            denom_p[length] += dp 
+            denom_r[length] += dr 
+    return numerator, denom_p, denom_r
+
+
 if __name__ == '__main__':
     # arguments from snippets
     parser = argparse.ArgumentParser()
@@ -217,6 +241,7 @@ if __name__ == '__main__':
         args.epoch_step = checkpoint['step']
         if args.use_proj:
             encoder.proj.load_state_dict(checkpoint['enc_proj'])
+        from IPython import embed; embed(using=False)
         if lr_controller.not_improved >= lr_controller.terminate_range:
             logger.info('No more optimization, exiting.')
             exit(0)
