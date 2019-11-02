@@ -8,9 +8,10 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from encoders.pretrained_transformers import Encoder
-from tasks.constituent.new.data import ConstituentDataset, collate_fn
-from tasks.constituent.new.models import SpanClassifier
-from tasks.constituent.new.utils import instance_f1_info, f1_score
+from encoders.pretrained_transformers.batched_span_reprs import get_span_repr
+from tasks.constituent.data import ConstituentDataset, collate_fn
+from tasks.constituent.models import MultiLayerPerceptron
+from tasks.constituent.utils import instance_f1_info, f1_score
 
 
 class LearningRateController(object):
@@ -36,7 +37,11 @@ def forward_batch(model, data, valid=False):
     sents, spans, labels = data
     with torch.no_grad():
         output = encoder(sents)
-    preds = model(output.detach(), spans[:, 0], spans[:, 1] - 1)
+        span_reprs = get_span_repr(
+            output, spans[:, 0], spans[:, 1] - 1, 
+            method=args.encoding_method
+        )
+    preds = model(span_reprs.detach())
     if valid:
         return preds
     else:
@@ -60,10 +65,34 @@ def validate(loader, model):
         numerator += num
         denom_p += dp
         denom_r += dr
-    # recover the random state for reproduction
+    # recover the random state
     torch.random.set_rng_state(rng_state)
     torch.cuda.random.set_rng_state(cuda_rng_state)
     return f1_score(numerator, denom_p, denom_r)
+
+
+def analysis(loader, model): 
+    import numpy as np  
+    numerator = np.zeros(1000) 
+    denom_p = np.zeros(1000) 
+    denom_r = np.zeros(1000) 
+    for sents, spans, labels in loader: 
+        if torch.cuda.is_available(): 
+            sents = sents.cuda() 
+            spans = spans.cuda() 
+            labels = labels.cuda() 
+        preds = forward_batch(model, (sents, spans, labels), True) 
+        pred_labels = (preds > 0.5).long() 
+        eqs = pred_labels * labels 
+        for i in range(spans.shape[0]): 
+            length = (spans[i][1] - spans[i][0] + 1).item() 
+            num = eqs[i].sum() 
+            dp = pred_labels[i].sum() 
+            dr = labels[i].sum() 
+            numerator[length] += num 
+            denom_p[length] += dp 
+            denom_r[length] += dr 
+    return numerator, denom_p, denom_r
 
 
 if __name__ == '__main__':
@@ -159,10 +188,19 @@ if __name__ == '__main__':
 
     # initialize models: MLP
     logger.info('Initializing models.')
-    model = SpanClassifier(
-        encoder, args.use_proj, args.proj_dim, args.hidden_dims, 
-        len(ConstituentDataset.label_dict),
-        pooling_method=args.encoding_method
+    if args.encoding_method in ['avg', 'max', 'diff', 'attn']:
+        input_dim = args.proj_dim if args.use_proj else encoder.hidden_size
+    elif args.encoding_method in ['diff_sum']:
+        input_dim = (
+            args.proj_dim if args.use_proj else encoder.hidden_size) * 2
+    elif args.encoding_method in ['coherent']:
+        input_dim = (args.proj_dim if args.use_proj else encoder.hidden_size)\
+            // 4 * 2 + 1
+    else:
+        raise Exception(
+            f'Encoding method {args.encoding_method} not supported.')
+    model = MultiLayerPerceptron(
+        input_dim, args.hidden_dims, len(ConstituentDataset.label_dict)
     )
     if torch.cuda.is_available():
         encoder = encoder.cuda()
@@ -170,13 +208,17 @@ if __name__ == '__main__':
     
     # initialize optimizer
     logger.info('Initializing optimizer.')
+    params = list(model.parameters())
+    if args.use_proj:
+        params += list(encoder.proj.parameters())
     optimizer = getattr(torch.optim, args.optimizer)(
-        model.parameters(), lr=args.learning_rate
+        params, lr=args.learning_rate
     )
     
     # initialize best model info, and lr controller
     best_f1 = 0
     best_model = None
+    best_proj = None
     lr_controller = LearningRateController()
 
     # load checkpoint, if exists
@@ -190,12 +232,16 @@ if __name__ == '__main__':
         checkpoint = torch.load(ckpt_path)
         model.load_state_dict(checkpoint['model'])
         best_model = checkpoint['best_model']
+        best_proj = checkpoint['best_proj']
         best_f1 = checkpoint['best_f1']
         optimizer.load_state_dict(checkpoint['optimizer'])
         lr_controller = checkpoint['lr_controller']
         torch.cuda.random.set_rng_state(checkpoint['cuda_rng_state'])
         args.start_epoch = checkpoint['epoch']
         args.epoch_step = checkpoint['step']
+        if args.use_proj:
+            encoder.proj.load_state_dict(checkpoint['enc_proj'])
+        from IPython import embed; embed(using=False)
         if lr_controller.not_improved >= lr_controller.terminate_range:
             logger.info('No more optimization, exiting.')
             exit(0)
@@ -251,13 +297,18 @@ if __name__ == '__main__':
                     )
                     best_f1 = curr_f1
                     best_model = model.state_dict()
-                    torch.save(best_model, best_model_path)
+                    if args.use_proj:
+                        best_proj = encoder.proj.state_dict()
+                        torch.save((best_model, best_proj), best_model_path)
+                    else:
+                        torch.save(best_model, best_model_path)
                     logger.info('New best model!')
                 logger.info('-' * 80)
                 model.train()
                 # save checkpoint
                 torch.save({
                     'model': model.state_dict(),
+                    'best_proj': best_proj,
                     'best_model': best_model,
                     'best_f1': best_f1,
                     'optimizer': optimizer.state_dict(),
@@ -265,14 +316,15 @@ if __name__ == '__main__':
                     'step': step,
                     'lr_controller': lr_controller,
                     'cuda_rng_state': torch.cuda.random.get_rng_state(),
+                    'enc_proj': None if not args.use_proj else \
+                        encoder.proj.state_dict()
                 }, ckpt_path)
                 # update validation result
                 not_improved_epoch = lr_controller.add_value(curr_f1)
                 if not_improved_epoch == 0:
                     pass
                 elif not_improved_epoch >= lr_controller.terminate_range:
-                    logger.info(
-                        'Terminating due to lack of validation improvement.')
+                    logger.info('Terminating due to lack of validation improvement.')
                     terminate = True
                 elif not_improved_epoch % lr_controller.weight_decay_range == 0:
                     logger.info(
@@ -280,8 +332,7 @@ if __name__ == '__main__':
                         f'{optimizer.param_groups[0]["lr"] / 2.0:.8f}'
                     )
                     optimizer = getattr(torch.optim, args.optimizer)(
-                        model.parameters(), 
-                        lr=optimizer.param_groups[0]['lr'] / 2.0
+                        params, lr=optimizer.param_groups[0]['lr'] / 2.0
                     )
                 if (time.time() - args.start_time) >= args.time_limit:
                     logger.info('Training time is almost up -- terminating.')
@@ -289,7 +340,10 @@ if __name__ == '__main__':
 
     # finished training, testing
     assert best_model is not None
+    assert (not args.use_proj) or (best_proj is not None)
     model.load_state_dict(best_model)
+    if args.use_proj:
+        encoder.proj.load_state_dict(best_proj)
     model.eval()
     with torch.no_grad():
         test_f1 = validate(data_loader['test'], model)

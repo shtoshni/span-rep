@@ -19,9 +19,6 @@ python /scratch/freda/Witter/witter/slurm/torch_version.py
 
 # run probing script 
 # 1: size; 2: method
-export PYTORCH_PRETRAINED_BERT_CACHE=/scratch/freda/
-export PATH=$PATH:/share/data/lang/users/freda/codebase/hackathon_2019/encoders/pretrained_transformers/SpanBERT/ 
-export PYTHONPATH=$PYTHONPATH:/share/data/lang/users/freda/codebase/hackathon_2019/encoders/pretrained_transformers/SpanBERT/ 
 cd /share/data/lang/users/freda/codebase/hackathon_2019
-python -m tasks.constituent.new.main --model-type spanbert --model-name spanbert-$1-cased-$2 --model-size $1 \
+python -m tasks.constituent.main --model-name bert-$1-cased-$2 --model-size $1 \
     --encoding-method $2 --use-proj --proj-dim 256 --epochs 10

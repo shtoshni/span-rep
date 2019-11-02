@@ -3,7 +3,7 @@ import json
 import torch
 from torch.utils.data import Dataset
 
-from tasks.constituent.new.utils import convert_word_to_subword
+from tasks.constituent.utils import convert_word_to_subword
 
 
 class ConstituentDataset(Dataset):

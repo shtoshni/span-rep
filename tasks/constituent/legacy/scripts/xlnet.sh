@@ -20,5 +20,5 @@ python /scratch/freda/Witter/witter/slurm/torch_version.py
 # run probing script 
 # 1: size; 2: method
 cd /share/data/lang/users/freda/codebase/hackathon_2019
-python -m tasks.constituent.new.main --model-type xlnet --model-name xlnet-$1-cased-$2 --model-size $1 \
+python -m tasks.constituent.main --model-type xlnet --model-name xlnet-$1-cased-$2 --model-size $1 \
     --encoding-method $2 --use-proj --proj-dim 256 --epochs 10
