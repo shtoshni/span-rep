@@ -202,7 +202,7 @@ def main():
     num_steps = (num_steps // hp.eval_steps) * hp.eval_steps
     logging.info("Total training steps: %d" % num_steps)
 
-    location = path.join(best_model_path, "model.pt")
+    location = path.join(model_path, "model.pt")
     if path.exists(location):
         logging.info("Loading previous checkpoint")
         checkpoint = torch.load(location)
