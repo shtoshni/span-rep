@@ -167,7 +167,7 @@ def get_model_name(hp):
 
     str_repr = str(opt_dict.items())
     hash_idx = hashlib.md5(str_repr.encode("utf-8")).hexdigest()
-    model_name = "coref_" + str(hash_idx)
+    model_name = "ner_" + str(hash_idx)
     return model_name
 
 
