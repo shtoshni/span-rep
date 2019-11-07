@@ -94,13 +94,13 @@ def train(model, train_iter, val_iter, optimizer, scheduler,
                     max_f1 = f1
                     logging.info("Max F1: %.3f" % max_f1)
                     location = path.join(best_model_dir, "model.pt")
-                    save_model(model, optimizer, scheduler, steps_done, f1, num_stuck_evals,
+                    save_model(model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals,
                                location)
                 else:
                     num_stuck_evals += 1
 
                 location = path.join(model_dir, "model.pt")
-                save_model(model, optimizer, scheduler, steps_done, f1, num_stuck_evals, location)
+                save_model(model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals, location)
 
                 logging.info("Val F1: %.3f Steps: %d (Max F1: %.3f)" % (f1, steps_done, max_f1))
 
@@ -173,22 +173,22 @@ def get_model_name(hp):
 
 def write_res(all_res, output_file):
     with open(output_file, 'w') as f:
-        f.write('span_width\tpred\tlabel\tcorr\n')
+        f.write('span_width\tcorr\n')
         for res in all_res:
             span, pred, label, corr = (res['span'], res['pred'], res['label'], res['corr'])
             # End points of the spans are included, hence the +1 in width calc
             span_width = span[1] - span[0] + 1
-            f.write('%d\t%d\t%d\t%d\t%d\t%d\t%d\n' % (
-                span_width, pred, label, corr))
+            errors = label.shape[0] - torch.sum(corr)
+            f.write('%d\t%d\n' % (
+                span_width, errors))
 
 
-def final_eval(hp, best_model_dir, val_iter, test_iter):
+def final_eval(hp, model, best_model_dir, val_iter, test_iter):
     location = path.join(best_model_dir, "model.pt")
     model_dir = path.dirname(best_model_dir)
     val_f1, test_f1 = 0, 0
     if path.exists(location):
         checkpoint = torch.load(location)
-        model = NERModel(**vars(hp)).cuda()
         model.span_net.load_state_dict(checkpoint['span_net'])
         model.label_net.load_state_dict(checkpoint['label_net'])
         model.encoder.weighing_params = checkpoint['weighing_params']
@@ -268,7 +268,7 @@ def main():
               eval_steps=hp.eval_steps, num_steps=num_steps,
               init_num_stuck_evals=init_num_stuck_evals)
 
-    val_f1, test_f1 = final_eval(hp, best_model_path, val_iter, test_iter)
+    val_f1, test_f1 = final_eval(hp, model, best_model_path, val_iter, test_iter)
     perf_dir = path.join(hp.model_dir, "perf")
     if not path.exists(perf_dir):
         os.makedirs(perf_dir)

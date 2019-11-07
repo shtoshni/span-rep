@@ -106,12 +106,12 @@ def train(model, train_iter, val_iter, optimizer, optimizer_tune, scheduler,
                     max_f1 = f1
                     logging.info("Max F1: %.3f" % max_f1)
                     location = path.join(best_model_dir, "model.pt")
-                    save_model(model, optimizer, scheduler, steps_done, f1, num_stuck_evals, location)
+                    save_model(model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals, location)
                 else:
                     num_stuck_evals += 1
 
                 location = path.join(model_dir, "model.pt")
-                save_model(model, optimizer, scheduler, steps_done, f1, num_stuck_evals, location)
+                save_model(model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals, location)
 
                 if num_stuck_evals >= 20:
                     logging.info("No improvement for 20 evaluations")
