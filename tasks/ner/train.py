@@ -85,7 +85,7 @@ def train(model, train_iter, val_iter, optimizer, scheduler,
 
             if (steps_done % eval_steps) == 0:
                 logging.info("Evaluating at %d" % steps_done)
-                f1 = eval(model, val_iter)
+                f1, _ = eval(model, val_iter)
                 # Scheduler step
                 scheduler.step(f1)
 
@@ -94,13 +94,13 @@ def train(model, train_iter, val_iter, optimizer, scheduler,
                     max_f1 = f1
                     logging.info("Max F1: %.3f" % max_f1)
                     location = path.join(best_model_dir, "model.pt")
-                    save_model(model, optimizer, scheduler, steps_done, f1, num_stuck_evals,
+                    save_model(model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals,
                                location)
                 else:
                     num_stuck_evals += 1
 
                 location = path.join(model_dir, "model.pt")
-                save_model(model, optimizer, scheduler, steps_done, f1, num_stuck_evals, location)
+                save_model(model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals, location)
 
                 logging.info("Val F1: %.3f Steps: %d (Max F1: %.3f)" % (f1, steps_done, max_f1))
 
@@ -122,6 +122,7 @@ def eval(model, val_iter):
     tn = 0
     fn = 0
 
+    all_res = []
     with torch.no_grad():
         for batch_data in val_iter:
             _, pred, label = model(batch_data)
@@ -132,6 +133,14 @@ def eval(model, val_iter):
             fp += torch.sum((1 - label) * pred)
             fn += torch.sum(label * (1 - pred))
 
+            batch_size = label.shape[0]
+            span = batch_data.span
+            for idx in range(batch_size):
+                all_res.append({'span': span[idx, :].tolist(),
+                                'pred': pred[idx],
+                                'label': label[idx],
+                                'corr': pred[idx] == label[idx]})
+
     if tp > 0:
         recall = tp/(tp + fn)
         precision = tp/(tp + fp)
@@ -141,7 +150,7 @@ def eval(model, val_iter):
         f_score = 0.0
 
     model.train()
-    return f_score
+    return f_score, all_res
 
 
 def get_model_name(hp):
@@ -158,8 +167,42 @@ def get_model_name(hp):
 
     str_repr = str(opt_dict.items())
     hash_idx = hashlib.md5(str_repr.encode("utf-8")).hexdigest()
-    model_name = "coref_" + str(hash_idx)
+    model_name = "ner_" + str(hash_idx)
     return model_name
+
+
+def write_res(all_res, output_file):
+    with open(output_file, 'w') as f:
+        f.write('span_width\tcorr\n')
+        for res in all_res:
+            span, pred, label, corr = (res['span'], res['pred'], res['label'], res['corr'])
+            # End points of the spans are included, hence the +1 in width calc
+            span_width = span[1] - span[0] + 1
+            errors = label.shape[0] - torch.sum(corr)
+            f.write('%d\t%d\n' % (
+                span_width, errors))
+
+
+def final_eval(hp, model, best_model_dir, val_iter, test_iter):
+    location = path.join(best_model_dir, "model.pt")
+    model_dir = path.dirname(best_model_dir)
+    val_f1, test_f1 = 0, 0
+    if path.exists(location):
+        checkpoint = torch.load(location)
+        model.span_net.load_state_dict(checkpoint['span_net'])
+        model.label_net.load_state_dict(checkpoint['label_net'])
+        model.encoder.weighing_params = checkpoint['weighing_params']
+        val_f1, val_res = eval(model, val_iter)
+        val_file = path.join(model_dir, "val_log.tsv")
+        write_res(val_res, val_file)
+
+        test_f1, test_res = eval(model, test_iter)
+        test_file = path.join(model_dir, "test_log.tsv")
+        write_res(test_res, test_file)
+
+        logging.info("Val F1: %.3f" % val_f1)
+        logging.info("Test F1: %.3f" % test_f1)
+    return (val_f1, test_f1)
 
 
 def main():
@@ -202,7 +245,7 @@ def main():
     num_steps = (num_steps // hp.eval_steps) * hp.eval_steps
     logging.info("Total training steps: %d" % num_steps)
 
-    location = path.join(best_model_path, "model.pt")
+    location = path.join(model_path, "model.pt")
     if path.exists(location):
         logging.info("Loading previous checkpoint")
         checkpoint = torch.load(location)
@@ -219,24 +262,13 @@ def main():
         torch.set_rng_state(checkpoint['rng_state'])
         logging.info("Steps done: %d, Max F1: %.3f" % (steps_done, max_f1))
 
-    train(model, train_iter, val_iter, optimizer, scheduler,
-          model_path, best_model_path, init_steps=steps_done, max_f1=max_f1,
-          eval_steps=hp.eval_steps, num_steps=num_steps,
-          init_num_stuck_evals=init_num_stuck_evals)
+    if not hp.eval:
+        train(model, train_iter, val_iter, optimizer, scheduler,
+              model_path, best_model_path, init_steps=steps_done, max_f1=max_f1,
+              eval_steps=hp.eval_steps, num_steps=num_steps,
+              init_num_stuck_evals=init_num_stuck_evals)
 
-    # load the best model and evaluate
-    location = path.join(best_model_path, "model.pt")
-    if path.exists(location):
-        checkpoint = torch.load(location)
-        model.span_net.load_state_dict(checkpoint['span_net'])
-        model.label_net.load_state_dict(checkpoint['label_net'])
-        model.encoder.weighing_params = checkpoint['weighing_params']
-        val_f1 = eval(model, val_iter)
-        test_f1 = eval(model, test_iter)
-
-        logging.info("Val F1: %.3f" % val_f1)
-        logging.info("Test F1: %.3f" % test_f1)
-
+    val_f1, test_f1 = final_eval(hp, model, best_model_path, val_iter, test_iter)
     perf_dir = path.join(hp.model_dir, "perf")
     if not path.exists(perf_dir):
         os.makedirs(perf_dir)
@@ -245,6 +277,7 @@ def main():
     else:
         perf_file = path.join(model_path, "perf.txt")
     with open(perf_file, "w") as f:
+        f.write("%s\n" % (model_path))
         f.write("%s\t%.4f\n" % ("Valid", val_f1))
         f.write("%s\t%.4f\n" % ("Test", test_f1))
 
