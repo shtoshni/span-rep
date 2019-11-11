@@ -16,11 +16,12 @@ logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
 MAX_STUCK_EVALS = 5
 
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-data_dir", type=str,
-        default="/home/shtoshni/Research/hackathon_2019/tasks/probing/data/length_random")
+        default="/home/shtoshni/Research/hackathon_2019/tasks/probing/data/word_random")
     parser.add_argument(
         "-model_dir", type=str,
         default="/home/shtoshni/Research/hackathon_2019/tasks/probing/checkpoints")
@@ -99,7 +100,8 @@ def train(model, train_iter, val_iter, optimizer, scheduler,
                     num_stuck_evals += 1
 
                 location = path.join(model_dir, "model.pt")
-                save_model(model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals, location)
+                save_model(model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals,
+                           location)
 
                 logging.info("Val F1: %.3f Steps: %d (Max F1: %.3f)" % (f1, steps_done, max_f1))
 
@@ -133,10 +135,12 @@ def eval(model, val_iter, final_eval=False):
             fn += torch.sum(label * (1 - pred))
 
             batch_size = label.shape[0]
-            span = batch_data.span
+            span1 = batch_data.span1
+            span2 = batch_data.span2
             for idx in range(batch_size):
                 if final_eval:
-                    all_res.append({'span': span[idx, :].tolist(),
+                    all_res.append({'span1': span1[idx, :].tolist(),
+                                    'span2': span2[idx, :].tolist(),
                                     'pred': pred[idx],
                                     'label': label[idx],
                                     'corr': pred[idx] == label[idx]})
@@ -167,20 +171,28 @@ def get_model_name(hp):
 
     str_repr = str(opt_dict.items())
     hash_idx = hashlib.md5(str_repr.encode("utf-8")).hexdigest()
-    model_name = "len_probing_" + str(hash_idx)
+    model_name = "word_probing_" + str(hash_idx)
     return model_name
 
 
 def write_res(all_res, output_file):
     with open(output_file, 'w') as f:
-        f.write('span_width\tcorr\n')
+        f.write('s1_width\ts2_width\tmax_width\tspan_sep\tpred\tlabel\tcorr\n')
         for res in all_res:
-            span, label, corr = (res['span'], res['label'], res['corr'])
+            span1, span2, pred, label, corr = (res['span1'], res['span2'], res['pred'],
+                                               res['label'], res['corr'])
             # End points of the spans are included, hence the +1 in width calc
-            span_width = span[1] - span[0] + 1
-            errors = label.shape[0] - torch.sum(corr)
-            f.write('%d\t%d\n' % (
-                span_width, errors))
+            s1_width = span1[1] - span1[0] + 1
+            s2_width = span2[1] - span2[0] + 1
+            max_width = max(s1_width, s2_width)
+            # Subtract the endpoint of one span from the start point of the other.
+            # One term would be -ve and the other term would be our answer. Hence, the max.
+            span_sep = max(span1[0] - span2[1] - 1, span2[0] - span1[1] - 1)
+            # But sometimes the span can overlap as well. So just to safeguard against that.
+            span_sep = max(span_sep, 0)
+
+            f.write('%d\t%d\t%d\t%d\t%d\t%d\t%d\n' % (
+                s1_width, s2_width, max_width, span_sep, pred, label, corr))
 
 
 def final_eval(hp, model, best_model_dir, val_iter, test_iter):
@@ -225,13 +237,13 @@ def main():
                       cased=False)
     # Load data
     logging.info("Loading data")
-    train_iter, val_iter, test_iter, num_labels = TaskDataset.iters(
+    train_iter, val_iter, test_iter = TaskDataset.iters(
         hp.data_dir, encoder, batch_size=hp.batch_size,
         eval_batch_size=hp.eval_batch_size, train_frac=hp.train_frac)
     logging.info("Data loaded")
 
     # Initialize the model
-    model = TaskModel(encoder, num_labels=num_labels, **vars(hp)).cuda()
+    model = TaskModel(encoder, **vars(hp)).cuda()
     sys.stdout.flush()
 
     optimizer = torch.optim.Adam(model.get_other_params(), lr=hp.lr)
