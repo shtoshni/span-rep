@@ -72,14 +72,14 @@ class Encoder(nn.Module):
                 self.tokenizer = BertTokenizer.from_pretrained(
                     model_name[4:], do_lower_case=do_lower_case)
 
-            self.num_layers = self.model.config.num_hidden_layers
+            self.num_layers = self.model.config.num_hidden_layers + 1
             self.hidden_size = self.model.config.hidden_size
 
         elif model == "xlnet":
             model_name = model + "-" + model_size + "-cased"
             self.model = XLNetModel.from_pretrained(model_name, output_hidden_states=True)
             self.tokenizer = XLNetTokenizer.from_pretrained(model_name, do_lower_case=do_lower_case)
-            self.num_layers = self.model.config.num_hidden_layers
+            self.num_layers = self.model.config.num_hidden_layers + 1
             self.hidden_size = self.model.config.hidden_size
         elif model == 'gpt2':
             assert (model_size in GPT2_MODEL_SIZES)
@@ -94,7 +94,7 @@ class Encoder(nn.Module):
             self.tokenizer = GPT2Tokenizer.from_pretrained(
                 model_name, do_lower_case=do_lower_case, pad_token="<|endoftext|>")
 
-            self.num_layers = self.model.config.n_layer
+            self.num_layers = self.model.config.n_layer + 1
             self.hidden_size = self.model.config.n_embd
 
         # Set the model name
@@ -348,12 +348,19 @@ class Encoder(nn.Module):
         if 'spanbert' in self.model_name:
             # SpanBERT is based on old APIs
             if not self.fine_tune:
+                # Get the embedding output separately
                 with torch.no_grad():
-                    encoded_layers = self.model(
-                        batch_ids, attention_mask=input_mask)
+                    embedding_output = self.model.embeddings(
+                        batch_ids, token_type_ids=torch.zeros_like(batch_ids))
+                    encoded_layers = self.model(batch_ids, attention_mask=input_mask)
             else:
-                encoded_layers = self.model(
-                    batch_ids, attention_mask=input_mask)
+                # Get the embedding output separately
+                embedding_output = self.model.embeddings(
+                    batch_ids, token_type_ids=torch.zeros_like(batch_ids))
+                encoded_layers = self.model(batch_ids, attention_mask=input_mask)
+
+            # Add the embedding layer to the rest of the outputs
+            encoded_layers = [embedding_output] + encoded_layers
             last_layer_states = encoded_layers[-1]
         else:
             if not self.fine_tune:
@@ -363,8 +370,10 @@ class Encoder(nn.Module):
             else:
                 last_layer_states, _,  encoded_layers = self.model(
                     batch_ids, attention_mask=input_mask)  # B x L x E
-            # Encoded layers also has the embedding layer - 0th entry
-            encoded_layers = encoded_layers[1:]
+            # # Encoded layers also has the embedding layer - 0th entry
+            # encoded_layers = encoded_layers[1:]
+
+        # print(len(encoded_layers))
 
         if just_last_layer:
             output = last_layer_states
