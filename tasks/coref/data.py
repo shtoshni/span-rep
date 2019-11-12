@@ -80,7 +80,7 @@ class CorefDataset(Dataset):
 if __name__ == '__main__':
     from encoders.pretrained_transformers import Encoder
     encoder = Encoder(cased=False)
-    path = "/share/data/lang/users/freda/codebase/hackathon_2019/tasks/constituent/data/edges/ontonotes/coref/"
+    path = "/home/shtoshni/Research/hackathon_2019/tasks/coref/data"
     train_iter, val_iter, test_iter = CorefDataset.iters(path, encoder, train_frac=1.0)
 
     print("Train size:", len(train_iter.data()))

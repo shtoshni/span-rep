@@ -174,14 +174,12 @@ def get_model_name(hp):
 
 def write_res(all_res, output_file):
     with open(output_file, 'w') as f:
-        f.write('span_width\tcorr\n')
+        f.write('span_width\tlabel\tcorr\n')
         for res in all_res:
             span, label, corr = (res['span'], res['label'], res['corr'])
             # End points of the spans are included, hence the +1 in width calc
             span_width = span[1] - span[0] + 1
-            errors = label.shape[0] - torch.sum(corr)
-            f.write('%d\t%d\n' % (
-                span_width, errors))
+            f.write('%d\t%d\t%d\n' % (span_width, label, corr))
 
 
 def final_eval(hp, model, best_model_dir, val_iter, test_iter):
