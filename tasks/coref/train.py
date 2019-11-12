@@ -37,9 +37,7 @@ def parse_args():
                         help="Can reduce this for quick testing.")
     parser.add_argument("-seed", type=int, default=0, help="Random seed")
     parser.add_argument("-eval", default=False, action="store_true")
-    parser.add_argument('-slurm_job_id', help="Slurm Array Job ID",
-                        default=None, type=str)
-    parser.add_argument('-slurm_array_id', help="Slurm Array Task ID",
+    parser.add_argument('-slurm_id', help="Slurm ID",
                         default=None, type=str)
 
     hp = parser.parse_args()
@@ -296,8 +294,8 @@ def main():
     perf_dir = path.join(hp.model_dir, "perf")
     if not path.exists(perf_dir):
         os.makedirs(perf_dir)
-    if hp.slurm_job_id and hp.slurm_array_id:
-        perf_file = path.join(perf_dir, hp.slurm_job_id + "_" + hp.slurm_array_id + ".txt")
+    if hp.slurm_id:
+        perf_file = path.join(perf_dir, hp.slurm_id + ".txt")
     else:
         perf_file = path.join(model_path, "perf.txt")
     with open(perf_file, "w") as f:
