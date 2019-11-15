@@ -134,12 +134,12 @@ def eval(model, val_iter):
             fn += torch.sum(label * (1 - pred))
 
             batch_size = label.shape[0]
-            span = batch_data.span
+            # Operate on the original span
+            span = batch_data.orig_span
             for idx in range(batch_size):
                 all_res.append({'span': span[idx, :].tolist(),
-                                'pred': pred[idx],
-                                'label': label[idx],
-                                'corr': pred[idx] == label[idx]})
+                                'tp': torch.sum(label * pred),
+                                'pred': torch.sum(pred)})
 
     if tp > 0:
         recall = tp/(tp + fn)
@@ -173,14 +173,12 @@ def get_model_name(hp):
 
 def write_res(all_res, output_file):
     with open(output_file, 'w') as f:
-        f.write('span_width\tcorr\n')
+        f.write('span_width\ttp\tpred\n')
         for res in all_res:
-            span, pred, label, corr = (res['span'], res['pred'], res['label'], res['corr'])
+            span, tp, pred = (res['span'], res['tp'], res['pred'])
             # End points of the spans are included, hence the +1 in width calc
-            span_width = span[1] - span[0] + 1
-            errors = label.shape[0] - torch.sum(corr)
-            f.write('%d\t%d\n' % (
-                span_width, errors))
+            span_width = span[1] - span[0]
+            f.write('%d\t%d\t%d\n' % (span_width, tp, pred))
 
 
 def final_eval(hp, model, best_model_dir, val_iter, test_iter):

@@ -15,7 +15,9 @@ class CorefDataset(Dataset):
         non_seq_field = Field(sequential=False, use_vocab=False, batch_first=True)
         fields = [('text', text_field),
                   ('span1', non_seq_field),
+                  ('orig_span1', non_seq_field),
                   ('span2', non_seq_field),
+                  ('orig_span2', non_seq_field),
                   ('label', non_seq_field)]
 
         examples = []
@@ -39,7 +41,8 @@ class CorefDataset(Dataset):
                     subword_to_word_idx, target["span2"])
                 label = target["label"]
                 examples.append(
-                    Example.fromlist([text, span1_index, span2_index, label], fields))
+                    Example.fromlist([text, span1_index, target["span1"], span2_index,
+                                      target["span2"], label], fields))
 
         super(CorefDataset, self).__init__(examples, fields)
 

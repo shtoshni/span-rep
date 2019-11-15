@@ -13,6 +13,7 @@ class NERDataset(Dataset):
                            batch_first=True, pad_token=model.tokenizer.pad_token_id)
         fields = [('text', text_field),
                   ('span', Field(sequential=False, use_vocab=False, batch_first=True)),
+                  ('orig_span', Field(sequential=False, use_vocab=False, batch_first=True)),
                   ('label', label_field)]
 
         examples = []
@@ -34,7 +35,7 @@ class NERDataset(Dataset):
                     subword_to_word_idx, target["span1"])
                 label = target["label"]
                 examples.append(
-                    Example.fromlist([text, span_index, label], fields))
+                    Example.fromlist([text, span_index, target["span1"], label], fields))
 
         super(NERDataset, self).__init__(examples, fields)
 

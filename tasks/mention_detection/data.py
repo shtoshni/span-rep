@@ -13,6 +13,7 @@ class TaskDataset(Dataset):
                            batch_first=True, pad_token=model.tokenizer.pad_token_id)
         fields = [('text', text_field),
                   ('span', Field(sequential=False, use_vocab=False, batch_first=True)),
+                  ('orig_span', Field(sequential=False, use_vocab=False, batch_first=True)),
                   ('label', Field(sequential=False, use_vocab=False, batch_first=True))]
 
         examples = []

@@ -142,8 +142,8 @@ def eval(model, val_iter):
             fn += torch.sum(label * (1 - pred))
 
             batch_size = label.shape[0]
-            span1 = batch_data.span1
-            span2 = batch_data.span2
+            span1 = batch_data.orig_span1
+            span2 = batch_data.orig_span2
             for idx in range(batch_size):
                 all_res.append({'span1': span1[idx, :].tolist(),
                                 'span2': span2[idx, :].tolist(),
@@ -187,9 +187,8 @@ def write_res(all_res, output_file):
         for res in all_res:
             span1, span2, pred, label, corr = (res['span1'], res['span2'], res['pred'],
                                                res['label'], res['corr'])
-            # End points of the spans are included, hence the +1 in width calc
-            s1_width = span1[1] - span1[0] + 1
-            s2_width = span2[1] - span2[0] + 1
+            s1_width = span1[1] - span1[0]
+            s2_width = span2[1] - span2[0]
             max_width = max(s1_width, s2_width)
             # Subtract the endpoint of one span from the start point of the other.
             # One term would be -ve and the other term would be our answer. Hence, the max.

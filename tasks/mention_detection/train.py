@@ -134,7 +134,8 @@ def eval(model, val_iter, final_eval=False):
             fn += torch.sum(label * (1 - pred))
 
             batch_size = label.shape[0]
-            span = batch_data.span
+            # Operate on the original span
+            span = batch_data.orig_span
             for idx in range(batch_size):
                 if final_eval:
                     all_res.append({'span': span[idx, :].tolist(),
@@ -178,7 +179,7 @@ def write_res(all_res, output_file):
         for res in all_res:
             span, label, corr = (res['span'], res['label'], res['corr'])
             # End points of the spans are included, hence the +1 in width calc
-            span_width = span[1] - span[0] + 1
+            span_width = span[1] - span[0]
             f.write('%d\t%d\t%d\n' % (span_width, label, corr))
 
 
