@@ -217,6 +217,7 @@ def final_eval(hp, best_model_dir, val_iter, test_iter):
         test_file = path.join(model_dir, "test_log.tsv")
         write_res(test_res, test_file)
 
+        logging.info("Model dir: %s" % model_dir)
         logging.info("Val F1: %.3f" % val_f1)
         logging.info("Test F1: %.3f" % test_f1)
     return (val_f1, test_f1)
