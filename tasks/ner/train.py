@@ -138,8 +138,8 @@ def eval(model, val_iter):
             span = batch_data.orig_span
             for idx in range(batch_size):
                 all_res.append({'span': span[idx, :].tolist(),
-                                'tp': torch.sum(label * pred),
-                                'pred': torch.sum(pred)})
+                                'tp': torch.sum(label[idx, :] * pred[idx, :]),
+                                'pred': torch.sum(pred[idx, :])})
 
     if tp > 0:
         recall = tp/(tp + fn)
