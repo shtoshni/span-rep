@@ -47,14 +47,19 @@ class AvgSpanRepr(SpanRepr, nn.Module):
 
 
 class DiffSpanRepr(SpanRepr, nn.Module):
-    """Class implementing the diff span representation - [h_j - h_i]"""
+    """Class implementing the diff span representation - [h_j - h_{i-1}]"""
 
     def forward(self, encoded_input, start_ids, end_ids):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
         batch_size = encoded_input.shape[0]
+        # first_comp = (encoded_input[torch.arange(batch_size), end_ids, :]
+        #               - encoded_input[torch.arange(batch_size), start_ids - 1, :])
+        # second_comp = (encoded_input[torch.arange(batch_size), start_ids, :]
+        #                - encoded_input[torch.arange(batch_size), end_ids + 1, :])
+        # span_repr = torch.cat([first_comp, second_comp], dim=1)
         span_repr = (encoded_input[torch.arange(batch_size), end_ids, :]
-                     - encoded_input[torch.arange(batch_size), start_ids, :])
+                     - encoded_input[torch.arange(batch_size), start_ids - 1, :])
         return span_repr
 
     def get_output_dim(self):
@@ -62,6 +67,24 @@ class DiffSpanRepr(SpanRepr, nn.Module):
             return self.proj_dim
         else:
             return self.input_dim
+
+
+class EndPointRepr(SpanRepr, nn.Module):
+    """Class implementing the diff span representation - [h_j; h_i]"""
+
+    def forward(self, encoded_input, start_ids, end_ids):
+        if self.use_proj:
+            encoded_input = self.proj(encoded_input)
+        batch_size = encoded_input.shape[0]
+        span_repr = torch.cat([encoded_input[torch.arange(batch_size), start_ids, :],
+                               encoded_input[torch.arange(batch_size), end_ids, :]], dim=1)
+        return span_repr
+
+    def get_output_dim(self):
+        if self.use_proj:
+            return 2 * self.proj_dim
+        else:
+            return 2 * self.input_dim
 
 
 class DiffSumSpanRepr(SpanRepr, nn.Module):
@@ -128,6 +151,30 @@ class CoherentSpanRepr(SpanRepr, nn.Module):
             return (self.input_dim//2 + 1)
 
 
+class CoherentActualSpanRepr(SpanRepr, nn.Module):
+    """Class implementing the coherent span representation."""
+
+    def forward(self, encoded_input, start_ids, end_ids):
+        if self.use_proj:
+            encoded_input = self.proj(encoded_input)
+        batch_size = encoded_input.shape[0]
+        d_b = (int(encoded_input.shape[2]) * 480)//1024
+        d_c = (int(encoded_input.shape[2]) * 32)//1024
+        h_start = encoded_input[torch.arange(batch_size), start_ids, :]
+        h_end = encoded_input[torch.arange(batch_size), end_ids, :]
+
+        coherence_term = torch.sum(
+            h_start[:, 2*d_b:2*d_b + d_c] * h_end[:, 2*d_b + d_c:], dim=1, keepdim=True)
+        return torch.cat(
+            [h_start[:, :d_b], h_end[:, d_b:2*d_b], coherence_term], dim=1)
+
+    def get_output_dim(self):
+        if self.use_proj:
+            return ((self.proj_dim * 960)//1024 + 1)
+        else:
+            return ((self.input_dim * 960)//1024 + 1)
+
+
 class AttnSpanRepr(SpanRepr, nn.Module):
     """Class implementing the attention-based span representation."""
 
@@ -182,8 +229,12 @@ def get_span_module(input_dim, method="avg", use_proj=False, proj_dim=256):
         return DiffSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
     elif method == "diff_sum":
         return DiffSumSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
+    elif method == "endpoint":
+        return EndPointRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
     elif method == "coherent":
         return CoherentSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
+    elif method == "coherent_actual":
+        return CoherentActualSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
     elif method == "attn":
         return AttnSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
     elif method == "coref":

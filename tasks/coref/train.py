@@ -17,8 +17,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-data_dir", type=str,
-        default="/share/data/lang/users/freda/codebase/hackathon_2019/tasks/constituent/"
-        "data/edges/ontonotes/coref")
+        default="/home/shtoshni/Research/hackathon_2019/tasks/coref/data")
     parser.add_argument(
         "-model_dir", type=str,
         default="/home/shtoshni/Research/hackathon_2019/tasks/coref/checkpoints")
