@@ -151,7 +151,7 @@ class CoherentSpanRepr(SpanRepr, nn.Module):
             return (self.input_dim//2 + 1)
 
 
-class CoherentActualSpanRepr(SpanRepr, nn.Module):
+class CoherentOrigSpanRepr(SpanRepr, nn.Module):
     """Class implementing the coherent span representation."""
 
     def forward(self, encoded_input, start_ids, end_ids):
@@ -233,8 +233,8 @@ def get_span_module(input_dim, method="avg", use_proj=False, proj_dim=256):
         return EndPointRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
     elif method == "coherent":
         return CoherentSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
-    elif method == "coherent_actual":
-        return CoherentActualSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
+    elif method == "coherent_original":
+        return CoherentOrigSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
     elif method == "attn":
         return AttnSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
     elif method == "coref":
