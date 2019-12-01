@@ -187,16 +187,19 @@ class AttnSpanRepr(SpanRepr, nn.Module):
         if use_proj:
             input_dim = proj_dim
         self.attention_params = nn.Linear(input_dim, 1)
+        # Initialize weight to zero weight
+        self.attention_params.weight.data.fill_(0)
+        self.attention_params.bias.data.fill_(0)
 
     def forward(self, encoded_input, start_ids, end_ids):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
+
         span_mask = get_span_mask(start_ids, end_ids, encoded_input.shape[1])
         attn_mask = (1 - span_mask) * (-1e10)
         attn_logits = self.attention_params(encoded_input) + attn_mask
         attention_wts = nn.functional.softmax(attn_logits, dim=1)
         attention_term = torch.sum(attention_wts * encoded_input, dim=1)
-
         if self.use_endpoints:
             batch_size = encoded_input.shape[0]
             h_start = encoded_input[torch.arange(batch_size), start_ids, :]

@@ -31,6 +31,8 @@ def parse_args():
     parser.add_argument("-model", type=str, default="bert")
     parser.add_argument("-model_size", type=str, default="base")
     parser.add_argument("-fine_tune", default=False, action="store_true")
+    parser.add_argument("-proj_later", default=False, action="store_true")
+    parser.add_argument("-no_layer_weight", default=False, action="store_true")
     parser.add_argument("-pool_method", default="avg", type=str)
     parser.add_argument("-train_frac", default=1.0, type=float,
                         help="Can reduce this for quick testing.")
@@ -49,6 +51,9 @@ def save_model(model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals,
     save_dict['weighing_params'] = model.encoder.weighing_params
     save_dict['span_net'] = model.span_net.state_dict()
     save_dict['label_net'] = model.label_net.state_dict()
+    if model.proj_later:
+        save_dict['proj_net'] = model.proj_net.state_dict()
+
     save_dict.update({
         'steps_done': steps_done,
         'max_f1': max_f1,
@@ -117,6 +122,7 @@ def train(model, train_iter, val_iter, optimizer, optimizer_tune, scheduler,
                 sys.stdout.flush()
 
         logging.info("Epoch done!\n")
+        logging.info(model.encoder.weighing_params)
 
     logging.info("Training done!\n")
 
@@ -177,6 +183,14 @@ def get_model_name(hp):
     str_repr = str(opt_dict.items())
     hash_idx = hashlib.md5(str_repr.encode("utf-8")).hexdigest()
     model_name = "coref_" + str(hash_idx)
+
+    if hp.proj_later:
+        model_name += "_proj_later"
+        logging.info("proj_later\tTrue")
+    if hp.no_layer_weight:
+        model_name += "_no_layer_weight"
+        logging.info("no_layer_weight\tTrue")
+
     return model_name
 
 
@@ -207,6 +221,8 @@ def final_eval(hp, best_model_dir, val_iter, test_iter):
         model = CorefModel(**vars(hp)).cuda()
         model.span_net.load_state_dict(checkpoint['span_net'])
         model.label_net.load_state_dict(checkpoint['label_net'])
+        if hp.proj_later:
+            model.proj_net.load_state_dict(checkpoint['proj_net'])
         model.encoder.weighing_params = checkpoint['weighing_params']
         val_f1, val_res = eval(model, val_iter)
         val_file = path.join(model_dir, "val_log.tsv")
@@ -271,6 +287,8 @@ def main():
         model.encoder.weighing_params = checkpoint['weighing_params']
         model.span_net.load_state_dict(checkpoint['span_net'])
         model.label_net.load_state_dict(checkpoint['label_net'])
+        if hp.proj_later:
+            model.proj_net.load_state_dict(checkpoint['proj_net'])
         if hp.fine_tune:
             model.encoder.load_state_dict(checkpoint['encoder'])
         optimizer.load_state_dict(

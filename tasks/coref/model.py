@@ -6,26 +6,29 @@ from encoders.pretrained_transformers.span_reprs import get_span_module
 
 class CorefModel(nn.Module):
     def __init__(self, model='bert', model_size='base',
-                 span_dim=256, pool_method='avg', fine_tune=False, num_spans=1,
+                 span_dim=256, pool_method='avg', fine_tune=False,
+                 proj_later=False, no_layer_weight=False,
                  **kwargs):
         super(CorefModel, self).__init__()
 
         self.pool_method = pool_method
-        self.num_spans = num_spans
+        self.num_spans = 1
+        self.proj_later = proj_later
+        self.no_layer_weight = no_layer_weight
         self.encoder = Encoder(model=model, model_size=model_size, fine_tune=fine_tune,
                                cased=False)
         self.span_net = nn.ModuleDict()
+
         self.span_net['0'] = get_span_module(
             method=pool_method, input_dim=self.encoder.hidden_size,
-            use_proj=True, proj_dim=span_dim)
-        if num_spans > 1:
-            self.span_net['1'] = get_span_module(
-                method=pool_method, input_dim=self.encoder.hidden_size,
-                use_proj=True, proj_dim=span_dim)
-        self.pooled_dim = self.span_net['0'].get_output_dim()
+            use_proj=(not proj_later), proj_dim=span_dim)
+
+        if self.proj_later:
+            input_dim = self.span_net['0'].get_output_dim()
+            self.proj_net = nn.Linear(input_dim, span_dim)
 
         self.label_net = nn.Sequential(
-            nn.Linear(2 * self.pooled_dim, span_dim),
+            nn.Linear(2 * span_dim, span_dim),
             nn.Tanh(),
             nn.LayerNorm(span_dim),
             nn.Dropout(0.2),
@@ -45,6 +48,8 @@ class CorefModel(nn.Module):
         print("\nParams outside core transformer params:\n")
         for name, param in self.named_parameters():
             if param.requires_grad and name not in core_encoder_param_names:
+                if self.no_layer_weight and name == 'encoder.weighing_params':
+                    continue
                 print(name, param.data.size())
                 other_params.append(param)
         print("\n")
@@ -56,6 +61,8 @@ class CorefModel(nn.Module):
     def calc_span_repr(self, encoded_input, span_indices, index='0'):
         span_start, span_end = span_indices[:, 0], span_indices[:, 1]
         span_repr = self.span_net[index](encoded_input, span_start, span_end)
+        if self.proj_later:
+            span_repr = self.proj_net(span_repr)
         return span_repr
 
     def forward(self, batch_data):

@@ -84,6 +84,8 @@ def train(model, train_iter, val_iter, optimizer, scheduler,
 
             if (steps_done % eval_steps) == 0:
                 logging.info("Evaluating at %d" % steps_done)
+                # logging.info(model.span_net['0'].attention_params.weight)
+                # logging.info(model.span_net['0'].attention_params.bias)
                 f1, _ = eval(model, val_iter)
                 # Scheduler step
                 scheduler.step(f1)

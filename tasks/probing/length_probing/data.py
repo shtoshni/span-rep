@@ -20,6 +20,7 @@ class TaskDataset(Dataset):
         lines = f.readlines()
         is_train = self.check_for_train_file(path)
 
+        # if True:
         if is_train and train_frac < 1.0:
             red_num_lines = int(len(lines) * train_frac)
             lines = lines[:red_num_lines]
@@ -71,7 +72,6 @@ class TaskDataset(Dataset):
 
         label_field.build_vocab(train)
         num_labels = len(label_field.vocab.itos)
-        print(label_field.vocab.itos)
         return (train_iter, val_iter, test_iter, num_labels)
 
 
