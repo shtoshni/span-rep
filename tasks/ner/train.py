@@ -139,7 +139,9 @@ def eval(model, val_iter):
             for idx in range(batch_size):
                 all_res.append({'span': span[idx, :].tolist(),
                                 'tp': torch.sum(label[idx, :] * pred[idx, :]),
-                                'pred': torch.sum(pred[idx, :])})
+                                'pred': torch.sum(pred[idx, :]),
+                                'label_vec': label[idx, :],
+                                'pred_vec': pred[idx, :]})
 
     if tp > 0:
         recall = tp/(tp + fn)
@@ -173,12 +175,17 @@ def get_model_name(hp):
 
 def write_res(all_res, output_file):
     with open(output_file, 'w') as f:
-        f.write('span_width\ttp\tpred\n')
+        f.write('span_width\ttp\tpred\tlabel_vec\tpred_vec\n')
         for res in all_res:
-            span, tp, pred = (res['span'], res['tp'], res['pred'])
+            span, tp, pred, label_vec, pred_vec = (res['span'], res['tp'], res['pred'],
+                                                   res['label_vec'], res['pred_vec'])
+
             # End points of the spans are included, hence the +1 in width calc
             span_width = span[1] - span[0]
-            f.write('%d\t%d\t%d\n' % (span_width, tp, pred))
+
+            label_vec_str = ','.join([str(int(val)) for val in label_vec.tolist()])
+            pred_vec_str = ','.join([str(int(val)) for val in pred_vec.tolist()])
+            f.write('%d\t%d\t%d\t%s\t%s\n' % (span_width, tp, pred, label_vec_str, pred_vec_str))
 
 
 def final_eval(hp, model, best_model_dir, val_iter, test_iter):
@@ -197,6 +204,12 @@ def final_eval(hp, model, best_model_dir, val_iter, test_iter):
         test_f1, test_res = eval(model, test_iter)
         test_file = path.join(model_dir, "test_log.tsv")
         write_res(test_res, test_file)
+
+        label_list = val_iter.dataset.fields['label'].vocab.itos
+        label_file = path.join(model_dir, "labels.txt")
+        with open(label_file, 'w') as f:
+            for label in label_list:
+                f.write(label + "\n")
 
         logging.info("Model dir: %s" % model_dir)
         logging.info("Val F1: %.3f" % val_f1)
