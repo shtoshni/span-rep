@@ -21,12 +21,12 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-data_dir", type=str,
-        default="/home/shtoshni/Research/hackathon_2019/tasks/mention_detection/data/mention")
+        default="/home/shtoshni/Research/hackathon_2019/tasks/mention_detection/data/ontonotes")
     parser.add_argument(
         "-model_dir", type=str,
         default="/home/shtoshni/Research/hackathon_2019/tasks/mention_detection/checkpoints")
     parser.add_argument("-batch_size", type=int, default=64)
-    parser.add_argument("-eval_batch_size", type=int, default=64)
+    parser.add_argument("-eval_batch_size", type=int, default=128)
     parser.add_argument("-eval_steps", type=int, default=1000)
     parser.add_argument("-n_epochs", type=int, default=20)
     parser.add_argument("-lr", type=float, default=5e-4)
@@ -178,7 +178,8 @@ def write_res(all_res, output_file):
         f.write('span_width\tlabel\tcorr\n')
         for res in all_res:
             span, label, corr = (res['span'], res['label'], res['corr'])
-            # End points of the spans are included, hence the +1 in width calc
+            # Span width calculated on the original span indices which don't have
+            # the last index as part of the span.
             span_width = span[1] - span[0]
             f.write('%d\t%d\t%d\n' % (span_width, label, corr))
 

@@ -35,7 +35,7 @@ class TaskDataset(Dataset):
                     subword_to_word_idx, target["span1"])
                 label = target["label"]
                 examples.append(
-                    Example.fromlist([text, span_index, label], fields))
+                    Example.fromlist([text, span_index,  target["span1"], label], fields))
 
         super(TaskDataset, self).__init__(examples, fields)
 
