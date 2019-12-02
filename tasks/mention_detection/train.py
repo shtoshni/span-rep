@@ -26,7 +26,7 @@ def parse_args():
         "-model_dir", type=str,
         default="/home/shtoshni/Research/hackathon_2019/tasks/mention_detection/checkpoints")
     parser.add_argument("-batch_size", type=int, default=64)
-    parser.add_argument("-eval_batch_size", type=int, default=128)
+    parser.add_argument("-eval_batch_size", type=int, default=64)
     parser.add_argument("-eval_steps", type=int, default=1000)
     parser.add_argument("-n_epochs", type=int, default=20)
     parser.add_argument("-lr", type=float, default=5e-4)
