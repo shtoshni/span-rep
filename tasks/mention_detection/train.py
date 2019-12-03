@@ -223,7 +223,7 @@ def main():
 
     # Hacky way of assigning the number of labels.
     encoder = Encoder(model=hp.model, model_size=hp.model_size, fine_tune=False,
-                      cased=False)
+                      cased=True)
     # Load data
     logging.info("Loading data")
     train_iter, val_iter, test_iter = TaskDataset.iters(

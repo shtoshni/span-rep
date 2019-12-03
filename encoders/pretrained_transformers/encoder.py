@@ -31,8 +31,14 @@ class Encoder(nn.Module):
 
         # First initialize the model and tokenizer
         model_name = ''
+
         # Do we want the tokenizer to lower case or not
-        do_lower_case = not cased
+        do_lower_case = False
+        if model == 'bert' and (not cased):
+            # For other models this choice doesn't make sense since they are trained
+            # on cased version of text.
+            do_lower_case = True
+            
         # Model is one of the BERT variants
         if 'bert' in model:
             assert (model_size in BERT_MODEL_SIZES)

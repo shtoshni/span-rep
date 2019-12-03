@@ -16,7 +16,7 @@ class CorefModel(nn.Module):
         self.no_proj = no_proj
         self.no_layer_weight = no_layer_weight
         self.encoder = Encoder(model=model, model_size=model_size, fine_tune=fine_tune,
-                               cased=False)
+                               cased=True)
         self.span_net = nn.ModuleDict()
 
         self.span_net['0'] = get_span_module(
