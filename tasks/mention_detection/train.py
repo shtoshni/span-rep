@@ -21,7 +21,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-data_dir", type=str,
-        default="/home/shtoshni/Research/hackathon_2019/tasks/mention_detection/data/ontonotes")
+        default="/home/shtoshni/Research/hackathon_2019/tasks/mention_detection/data/ontonotes_5")
     parser.add_argument(
         "-model_dir", type=str,
         default="/home/shtoshni/Research/hackathon_2019/tasks/mention_detection/checkpoints")

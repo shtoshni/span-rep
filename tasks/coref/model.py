@@ -70,7 +70,11 @@ class CorefModel(nn.Module):
 
     def forward(self, batch_data):
         text, text_len = batch_data.text
-        encoded_input = self.encoder(text.cuda())
+        if self.no_layer_weight:
+            with torch.no_grad():
+                encoded_input = self.encoder(text.cuda())
+        else:
+            encoded_input = self.encoder(text.cuda())
 
         s1_repr = self.calc_span_repr(encoded_input, batch_data.span1.cuda(), index='0')
         if self.num_spans > 1:

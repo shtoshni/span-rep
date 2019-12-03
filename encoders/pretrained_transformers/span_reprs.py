@@ -188,8 +188,8 @@ class AttnSpanRepr(SpanRepr, nn.Module):
             input_dim = proj_dim
         self.attention_params = nn.Linear(input_dim, 1)
         # Initialize weight to zero weight
-        self.attention_params.weight.data.fill_(0)
-        self.attention_params.bias.data.fill_(0)
+        # self.attention_params.weight.data.fill_(0)
+        # self.attention_params.bias.data.fill_(0)
 
     def forward(self, encoded_input, start_ids, end_ids):
         if self.use_proj:
