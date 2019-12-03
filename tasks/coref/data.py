@@ -25,9 +25,9 @@ class CorefDataset(Dataset):
         lines = f.readlines()
         is_train = self.check_for_train_file(path)
 
-        if is_train and train_frac < 1.0:
-            red_num_lines = int(len(lines) * train_frac)
-            lines = lines[:red_num_lines]
+        # if is_train and train_frac < 1.0:
+        #     red_num_lines = int(len(lines) * train_frac)
+        #     lines = lines[:red_num_lines]
 
         for line in lines:
             instance = json.loads(line)
@@ -43,6 +43,9 @@ class CorefDataset(Dataset):
                 examples.append(
                     Example.fromlist([text, span1_index, target["span1"], span2_index,
                                       target["span2"], label], fields))
+
+        if is_train and train_frac < 1.0:
+            examples = examples[:int(len(examples) * train_frac)]
 
         super(CorefDataset, self).__init__(examples, fields)
 

@@ -8,7 +8,7 @@ import hashlib
 from os import path
 import os
 import sys
-
+import math
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
@@ -277,7 +277,7 @@ def main():
     init_num_stuck_evals = 0
     num_steps = (hp.n_epochs * len(train_iter.data())) // hp.batch_size
     # Quantize the number of training steps to eval steps
-    num_steps = (num_steps // hp.eval_steps) * hp.eval_steps
+    num_steps = int(math.ceil(num_steps / hp.eval_steps)) * hp.eval_steps
     logging.info("Total training steps: %d" % num_steps)
 
     location = path.join(model_path, "model.pt")
