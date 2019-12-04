@@ -188,6 +188,21 @@ def write_res(all_res, output_file):
             f.write('%d\t%d\t%d\t%s\t%s\n' % (span_width, tp, pred, label_vec_str, pred_vec_str))
 
 
+def write_kevin_logs(hp, label_list, all_res, output_file):
+    with open(output_file, 'w') as f:
+        f.write('Model\tSize\tTask\tRepr\tLabel\tSpan_Width\tCorr\n')
+        for res in all_res:
+            span, tp, pred, label_vec = (res['span'], res['tp'], res['pred'], res['label_vec'])
+            label_idx = (label_vec.tolist()).index(1)
+            span_width = span[1] - span[0]
+            if (tp == 1) and (pred == 1):
+                corr = 1
+            else:
+                corr = 0
+
+            f.write(f'{hp.model}\t{hp.model_size}\tNER\t{hp.pool_method}\t{label_list[label_idx]}\t{span_width}\t{corr}\n')
+
+
 def final_eval(hp, model, best_model_dir, val_iter, test_iter):
     location = path.join(best_model_dir, "model.pt")
     model_dir = path.dirname(best_model_dir)
@@ -197,15 +212,19 @@ def final_eval(hp, model, best_model_dir, val_iter, test_iter):
         model.span_net.load_state_dict(checkpoint['span_net'])
         model.label_net.load_state_dict(checkpoint['label_net'])
         model.encoder.weighing_params = checkpoint['weighing_params']
+        label_list = val_iter.dataset.fields['label'].vocab.itos
+
         val_f1, val_res = eval(model, val_iter)
         val_file = path.join(model_dir, "val_log.tsv")
         write_res(val_res, val_file)
+
+        kevin_val_file = path.join(model_dir, f'kevin_val_ner_{hp.model}_{hp.model_size}_{hp.pool_method}.tsv')
+        write_kevin_logs(hp, label_list, val_res[:15000], kevin_val_file)
 
         test_f1, test_res = eval(model, test_iter)
         test_file = path.join(model_dir, "test_log.tsv")
         write_res(test_res, test_file)
 
-        label_list = val_iter.dataset.fields['label'].vocab.itos
         label_file = path.join(model_dir, "labels.txt")
         with open(label_file, 'w') as f:
             for label in label_list:

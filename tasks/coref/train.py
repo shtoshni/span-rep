@@ -213,6 +213,17 @@ def write_res(all_res, output_file):
                 s1_width, s2_width, max_width, span_sep, pred, label, corr))
 
 
+def write_kevin_logs(hp, all_res, output_file):
+    with open(output_file, 'w') as f:
+        f.write('Model\tSize\tTask\tRepr\tLabel\tSpan1_Width\tSpan2_Width\tCorr\n')
+        for res in all_res:
+            span1, span2, label, corr = (res['span1'], res['span2'], res['label'], res['corr'])
+            s1_width = span1[1] - span1[0]
+            s2_width = span2[1] - span2[0]
+
+            f.write(f'{hp.model}\t{hp.model_size}\tCoref\t{hp.pool_method}\t{int(label)}\t{s1_width}\t{s2_width}\t{int(corr)}\n')
+
+
 def final_eval(hp, best_model_dir, val_iter, test_iter):
     location = path.join(best_model_dir, "model.pt")
     model_dir = path.dirname(best_model_dir)
@@ -227,6 +238,9 @@ def final_eval(hp, best_model_dir, val_iter, test_iter):
         val_f1, val_res = eval(model, val_iter)
         val_file = path.join(model_dir, "val_log.tsv")
         write_res(val_res, val_file)
+
+        kevin_val_file = path.join(model_dir, f'kevin_val_coref_{hp.model}_{hp.model_size}_{hp.pool_method}.tsv')
+        write_kevin_logs(hp, val_res[:15000], kevin_val_file)
 
         test_f1, test_res = eval(model, test_iter)
         test_file = path.join(model_dir, "test_log.tsv")
