@@ -219,7 +219,7 @@ def final_eval(hp, model, best_model_dir, val_iter, test_iter):
         write_res(val_res, val_file)
 
         kevin_val_file = path.join(model_dir, f'kevin_val_ner_{hp.model}_{hp.model_size}_{hp.pool_method}.tsv')
-        write_kevin_logs(hp, label_list, val_res[:15000], kevin_val_file)
+        write_kevin_logs(hp, label_list, val_res, kevin_val_file)
 
         test_f1, test_res = eval(model, test_iter)
         test_file = path.join(model_dir, "test_log.tsv")
