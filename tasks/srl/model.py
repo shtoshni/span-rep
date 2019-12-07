@@ -17,17 +17,12 @@ class SRLModel(nn.Module):
 
         self.span_net['0'] = get_span_module(
             method=pool_method, input_dim=self.encoder.hidden_size,
-            proj_dim=span_dim)
+            use_proj=True, proj_dim=span_dim)
         self.span_net['1'] = get_span_module(
             method=pool_method, input_dim=self.encoder.hidden_size,
-            proj_dim=span_dim)
+            use_proj=True, proj_dim=span_dim)
 
         self.pooled_dim = self.span_net['0'].get_output_dim()
-
-        # if self.no_proj:
-        #     input_dim = self.span_net['0'].get_output_dim()
-        #
-        #     self.proj_net = nn.Linear(input_dim, span_dim)
 
         self.label_net = nn.Sequential(
             nn.Linear(2 * self.pooled_dim, span_dim),
@@ -49,7 +44,7 @@ class SRLModel(nn.Module):
         other_params = []
         print("\nParams outside core transformer params:\n")
         for name, param in self.named_parameters():
-            if param.requires_grad and name not in core_encoder_param_names:
+            if param.requires_grad:
                 print(name, param.data.size())
                 other_params.append(param)
         print("\n")
@@ -61,8 +56,7 @@ class SRLModel(nn.Module):
     def calc_span_repr(self, encoded_input, span_indices, index='0'):
         span_start, span_end = span_indices[:, 0], span_indices[:, 1]
         span_repr = self.span_net[index](encoded_input, span_start, span_end)
-        # if self.no_proj:
-        #     span_repr = self.proj_net(span_repr)
+
         return span_repr
 
     def forward(self, batch_data):
