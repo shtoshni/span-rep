@@ -73,7 +73,8 @@ if __name__ == '__main__':
     parser.add_argument('--model-path', type=str, 
         default='tasks/constituent/checkpoints')
     parser.add_argument('--model-name', type=str, default='debug')
-    parser.add_argument('--batch-size', type=int, default=64)
+    parser.add_argument('--batch-size', type=int, default=16)
+    parser.add_argument('--real-batch-size', type=int, default=64)
     parser.add_argument('--epochs', type=int, default=5)
     parser.add_argument('--optimizer', type=str, default='Adam')
     parser.add_argument('--learning-rate', type=float, default=5e-4)
@@ -90,6 +91,7 @@ if __name__ == '__main__':
     parser.add_argument('--encoding-method', type=str, default='avg')
     parser.add_argument('--use-proj', action='store_true', default=False)
     parser.add_argument('--proj-dim', type=int, default=256)
+    parser.add_argument('--fine-tune', action='store_true', default=False)
     args = parser.parse_args()
 
     # save arguments
@@ -126,7 +128,7 @@ if __name__ == '__main__':
     
     # create data sets, tokenizers, and data loaders
     encoder = Encoder(args.model_type, args.model_size, 
-        args.cased, use_proj=args.use_proj, proj_dim=args.proj_dim
+        args.cased, use_proj=False, fine_tune=args.fine_tune
     )
     data_loader_path = os.path.join(
         args.model_path, args.model_name + '.loader.pt'
@@ -135,6 +137,11 @@ if __name__ == '__main__':
         logger.info('Loading datasets.')
         data_info = torch.load(data_loader_path)
         data_loader = data_info['data_loader']
+        ### To be removed
+        for split in ['train', 'development', 'test']:
+            data_loader[split] = DataLoader(data_loader[split].dataset, args.batch_size, 
+                collate_fn=collate_fn, shuffle=(split=='train'))
+        ### End to be removed 
         ConstituentDataset.label_dict = data_info['label_dict']
         ConstituentDataset.encoder = encoder
     else:
@@ -169,13 +176,18 @@ if __name__ == '__main__':
     
     # initialize optimizer
     logger.info('Initializing optimizer.')
-    params = [encoder.weighing_params] + list(model.parameters())
+    params = list()
+    for name, param in list(encoder.named_parameters()) + list(model.named_parameters()):
+        if param.requires_grad:
+            params.append(param)
+    print(len(params))
     optimizer = getattr(torch.optim, args.optimizer)(params, lr=args.learning_rate)
     
     # initialize best model info, and lr controller
     best_f1 = 0
     best_model = None 
     best_weighing_params = None
+    best_encoder = None
     lr_controller = LearningRateController()
 
     # load checkpoint, if exists
@@ -187,8 +199,10 @@ if __name__ == '__main__':
     if os.path.exists(ckpt_path):
         logger.info(f'Loading checkpoint from {ckpt_path}.')
         checkpoint = torch.load(ckpt_path)
+        encoder.load_state_dict(checkpoint['encoder'])
         model.load_state_dict(checkpoint['model'])
         best_model = checkpoint['best_model']
+        best_encoder = checkpoint['best_encoder']
         best_weighing_params = checkpoint['best_weighing_params']
         best_f1 = checkpoint['best_f1']
         optimizer.load_state_dict(checkpoint['optimizer'])
@@ -201,6 +215,7 @@ if __name__ == '__main__':
             logger.info('No more optimization, testing and exiting.')
             assert best_model is not None
             model.load_state_dict(best_model)
+            encoder.load_state_dict(best_encoder)
             encoder.weighing_params.data = best_weighing_params.data
             model.eval()
             with torch.no_grad():
@@ -227,24 +242,26 @@ if __name__ == '__main__':
                 spans = spans.cuda()
                 labels = labels.cuda()
             preds, loss = forward_batch(model, (sents, spans, labels))
+            actual_step = len(data_loader['train']) * epoch + step + 1
             # optimize model
-            optimizer.zero_grad()
+            if (actual_step - 1) % (args.real_batch_size // args.batch_size) == 0:
+                optimizer.zero_grad()
             loss.backward()
 
-            optimizer.step()
+            if actual_step % (args.real_batch_size // args.batch_size) == 0:
+                optimizer.step()
             # update metadata
             cummulated_loss += loss.item() * sents.shape[0]
             cummulated_num += sents.shape[0]
             # log
-            actual_step = len(data_loader['train']) * epoch + step + 1
-            if actual_step % args.log_step == 0:
+            if (actual_step % (args.real_batch_size // args.batch_size) == 0) and (actual_step // (args.real_batch_size // args.batch_size)) % args.log_step == 0:
                 logger.info(
                     f'Train '
-                    f'Epoch #{epoch} | Step {actual_step} | '
+                    f'Epoch #{epoch} | Step {actual_step // (args.real_batch_size // args.batch_size)} | '
                     f'loss {cummulated_loss / cummulated_num:8.4f}'
                 )
             # validate
-            if actual_step % args.eval_step == 0:
+            if (actual_step % (args.real_batch_size // args.batch_size) == 0) and (actual_step // (args.real_batch_size // args.batch_size)) % args.eval_step == 0:
                 model.eval()
                 logger.info('-' * 80)
                 with torch.no_grad():
@@ -257,6 +274,7 @@ if __name__ == '__main__':
                 if curr_f1 > best_f1:
                     best_f1 = curr_f1
                     best_model = model.state_dict()
+                    best_encoder = encoder.state_dict()
                     best_weighing_params = encoder.weighing_params
                     logger.info('New best model!')
                 logger.info('-' * 80)
@@ -280,9 +298,11 @@ if __name__ == '__main__':
                     )
                 # save checkpoint
                 torch.save({
+                    'encoder': encoder.state_dict(),
                     'model': model.state_dict(),
                     'weighing_params': encoder.weighing_params,
                     'best_model': best_model,
+                    'best_encoder': best_encoder,
                     'best_weighing_params': best_weighing_params,
                     'best_f1': best_f1,
                     'optimizer': optimizer.state_dict(),
@@ -299,6 +319,7 @@ if __name__ == '__main__':
     # finished training, testing
     assert best_model is not None
     model.load_state_dict(best_model)
+    encoder.load_state_dict(best_encoder)
     encoder.weighing_params.data = best_weighing_params.data
     model.eval()
     with torch.no_grad():
