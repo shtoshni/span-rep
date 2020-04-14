@@ -25,11 +25,6 @@ class CorefModel(nn.Module):
 
         self.pooled_dim = self.span_net['0'].get_output_dim()
 
-        # if self.no_proj:
-        #     input_dim = self.span_net['0'].get_output_dim()
-        #
-        #     self.proj_net = nn.Linear(input_dim, span_dim)
-
         self.label_net = nn.Sequential(
             nn.Linear(2 * self.pooled_dim, span_dim),
             nn.Tanh(),

@@ -5,3 +5,4 @@ local_output/
 **/slurm*
 *.ipynb_checkpoints/
 *.ipynb
+*.jpg
