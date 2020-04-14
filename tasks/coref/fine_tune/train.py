@@ -87,7 +87,7 @@ def train(args, model, train_iter, val_iter, optimizer, scheduler,
                 optimizer.zero_grad()
                 steps_done += 1
 
-            if steps_done and ((steps_done % eval_steps) == 0):
+            if (idx % batch_size_fac == 0) and (steps_done % eval_steps == 0):
                 logging.info("Evaluating at %d" % steps_done)
                 f1, _ = eval(model, val_iter)
                 logging.info(
