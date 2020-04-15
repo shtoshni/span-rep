@@ -6,3 +6,5 @@ local_output/
 *.ipynb_checkpoints/
 *.ipynb
 *.jpg
+**/notebooks/*
+**/plots/*
