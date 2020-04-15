@@ -1,16 +1,15 @@
 import torch
 import torch.nn as nn
-from encoders.pretrained_transformers import Encoder
 from encoders.pretrained_transformers.span_reprs import get_span_module
 
 
 class SRLModel(nn.Module):
     def __init__(self, encoder,
-                 span_dim=256, pool_method='avg', num_labels=1,
+                 span_dim=256, pool_method='avg', num_labels=1, just_last_layer=False,
                  **kwargs):
         super(SRLModel, self).__init__()
         self.encoder = encoder
-
+        self.just_last_layer = just_last_layer
         self.pool_method = pool_method
         self.num_spans = 2
         self.span_net = nn.ModuleDict()
@@ -61,7 +60,7 @@ class SRLModel(nn.Module):
 
     def forward(self, batch_data):
         text, text_len = batch_data.text
-        encoded_input = self.encoder(text.cuda())
+        encoded_input = self.encoder(text.cuda(), just_last_layer=self.just_last_layer)
 
         s1_repr = self.calc_span_repr(encoded_input, batch_data.span1.cuda(), index='0')
         s2_repr = self.calc_span_repr(encoded_input, batch_data.span2.cuda(), index='1')

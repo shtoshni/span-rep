@@ -25,14 +25,15 @@ def parse_args():
         "-model_dir", type=str,
         default="/home/shtoshni/Research/hackathon_2019/tasks/srl/checkpoints")
     parser.add_argument("-batch_size", type=int, default=64)
+    parser.add_argument("-real_batch_size", type=int, default=64)
     parser.add_argument("-eval_batch_size", type=int, default=32)
     parser.add_argument("-eval_steps", type=int, default=1000)
     parser.add_argument("-n_epochs", type=int, default=20)
     parser.add_argument("-lr", type=float, default=5e-4)
-    parser.add_argument("-lr_tune", type=float, default=1e-5)
     parser.add_argument("-span_dim", type=int, default=256)
     parser.add_argument("-model", type=str, default="bert")
     parser.add_argument("-model_size", type=str, default="base")
+    parser.add_argument("-just_last_layer", default=False, action="store_true")
     parser.add_argument("-fine_tune", default=False, action="store_true")
     parser.add_argument("-no_proj", default=False, action="store_true")
     parser.add_argument("-no_layer_weight", default=False, action="store_true")
@@ -48,10 +49,12 @@ def parse_args():
     return hp
 
 
-def save_model(model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals, location):
+def save_model(hp, model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals, location):
     """Save model."""
     save_dict = {}
     save_dict['weighing_params'] = model.encoder.weighing_params
+    if hp.fine_tune:
+        save_dict['encoder'] = model.encoder.model.state_dict()
     save_dict['span_net'] = model.span_net.state_dict()
     save_dict['label_net'] = model.label_net.state_dict()
     save_dict.update({
@@ -66,27 +69,32 @@ def save_model(model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals,
     logging.info("Model saved at: %s" % (location))
 
 
-def train(model, train_iter, val_iter, optimizer, scheduler,
+def train(hp, model, train_iter, val_iter, optimizer, scheduler,
           model_dir, best_model_dir, init_steps=0, eval_steps=1000, num_steps=120000, max_f1=0,
           init_num_stuck_evals=0):
     model.train()
 
     steps_done = init_steps
     num_stuck_evals = init_num_stuck_evals
+    batch_size_fac = (hp.real_batch_size // hp.batch_size)
+    optimizer.zero_grad()
+
     while (steps_done < num_steps) and (num_stuck_evals < 20):
         logging.info("Epoch started")
         for idx, batch_data in enumerate(train_iter):
-            optimizer.zero_grad()
+            # optimizer.zero_grad()
             loss = model(batch_data)
             loss.backward()
 
             torch.nn.utils.clip_grad_norm_(
                 model.parameters(), 5.0)
 
-            optimizer.step()
-            steps_done += 1
+            if idx % batch_size_fac == 0:
+                optimizer.step()
+                optimizer.zero_grad()
+                steps_done += 1
 
-            if (steps_done % eval_steps) == 0:
+            if (idx % batch_size_fac == 0) and (steps_done % eval_steps == 0):
                 logging.info("Evaluating at %d" % steps_done)
                 f1, _ = eval(model, val_iter)
                 # Scheduler step
@@ -97,20 +105,19 @@ def train(model, train_iter, val_iter, optimizer, scheduler,
                     max_f1 = f1
                     logging.info("Max F1: %.3f" % max_f1)
                     location = path.join(best_model_dir, "model.pt")
-                    save_model(model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals,
+                    save_model(hp, model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals,
                                location)
                 else:
                     num_stuck_evals += 1
 
                 location = path.join(model_dir, "model.pt")
-                save_model(model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals, location)
+                save_model(hp, model, optimizer, scheduler, steps_done, max_f1, num_stuck_evals, location)
 
                 logging.info("Val F1: %.3f Steps: %d (Max F1: %.3f)" % (f1, steps_done, max_f1))
 
                 if num_stuck_evals >= 20:
                     logging.info("No improvement for 20 evaluations")
                     break
-
                 sys.stdout.flush()
 
         logging.info("Epoch done!\n")
@@ -166,8 +173,8 @@ def get_model_name(hp):
     opt_dict = OrderedDict()
     # Only include important options in hash computation
     imp_opts = ['model', 'model_size', 'batch_size', 'eval_steps',
-                'n_epochs',  'fine_tune', 'span_dim', 'pool_method', 'train_frac',
-                'seed', 'lr', 'lr_tune']
+                'fine_tune', 'span_dim', 'pool_method', 'just_last_layer', 'train_frac',
+                'seed', 'lr']
     hp_dict = vars(hp)
     for key in imp_opts:
         val = hp_dict[key]
@@ -184,6 +191,9 @@ def get_model_name(hp):
     if hp.no_layer_weight:
         model_name += "_no_layer_weight"
         logging.info("no_layer_weight\tTrue")
+
+    if hp.fine_tune:
+        model_name = "ft_" + model_name
 
     return model_name
 
@@ -236,6 +246,8 @@ def final_eval(hp, model, best_model_dir, val_iter, test_iter):
         model.span_net.load_state_dict(checkpoint['span_net'])
         model.label_net.load_state_dict(checkpoint['label_net'])
         model.encoder.weighing_params = checkpoint['weighing_params']
+        if hp.fine_tune:
+            model.encoder.model.load_state_dict(checkpoint['encoder'])
         label_list = val_iter.dataset.fields['label'].vocab.itos
 
         val_f1, val_res = eval(model, val_iter)
@@ -275,8 +287,8 @@ def main():
     torch.manual_seed(hp.seed)
 
     # Hacky way of assigning the number of labels.
-    encoder = Encoder(model=hp.model, model_size=hp.model_size, fine_tune=False,
-                      cased=True)
+    encoder = Encoder(model=hp.model, model_size=hp.model_size,
+                      fine_tune=hp.fine_tune, cased=True)
     # Load data
     logging.info("Loading data")
     train_iter, val_iter, test_iter, num_labels = SRLDataset.iters(
@@ -288,13 +300,16 @@ def main():
     model = SRLModel(encoder, num_labels=num_labels, **vars(hp)).cuda()
     sys.stdout.flush()
 
-    optimizer = torch.optim.Adam(model.get_other_params(), lr=hp.lr)
+    if not hp.fine_tune:
+        optimizer = torch.optim.Adam(model.get_other_params(), lr=hp.lr)
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=hp.lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='max', patience=5, factor=0.5, verbose=True)
     steps_done = 0
     max_f1 = 0
     init_num_stuck_evals = 0
-    num_steps = (hp.n_epochs * len(train_iter.data())) // hp.batch_size
+    num_steps = (hp.n_epochs * len(train_iter.data())) // hp.real_batch_size
     # Quantize the number of training steps to eval steps
     num_steps = (num_steps // hp.eval_steps) * hp.eval_steps
     logging.info("Total training steps: %d" % num_steps)
@@ -306,6 +321,8 @@ def main():
         model.encoder.weighing_params = checkpoint['weighing_params']
         model.span_net.load_state_dict(checkpoint['span_net'])
         model.label_net.load_state_dict(checkpoint['label_net'])
+        if hp.fine_tune:
+            model.encoder.model.load_state_dict(checkpoint['encoder'])
         optimizer.load_state_dict(
             checkpoint['optimizer_state_dict'])
         scheduler.load_state_dict(
@@ -317,7 +334,7 @@ def main():
         logging.info("Steps done: %d, Max F1: %.3f" % (steps_done, max_f1))
 
     if not hp.eval:
-        train(model, train_iter, val_iter, optimizer, scheduler,
+        train(hp, model, train_iter, val_iter, optimizer, scheduler,
               model_path, best_model_path, init_steps=steps_done, max_f1=max_f1,
               eval_steps=hp.eval_steps, num_steps=num_steps,
               init_num_stuck_evals=init_num_stuck_evals)
@@ -335,6 +352,7 @@ def main():
         f.write("%s\n" % (model_path))
         f.write("%s\t%.4f\n" % ("Valid", val_f1))
         f.write("%s\t%.4f\n" % ("Test", test_f1))
+
 
 if __name__ == '__main__':
     main()

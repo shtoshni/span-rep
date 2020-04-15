@@ -25,13 +25,14 @@ def parse_args():
     parser.add_argument('-real-batch-size', type=int, default=64)
     parser.add_argument("-eval_batch_size", type=int, default=32)
     parser.add_argument("-eval_steps", type=int, default=1000)
-    parser.add_argument("-n_epochs", type=int, default=10)
+    parser.add_argument("-n_epochs", type=int, default=20)
     # parser.add_argument("-lr", type=float, default=5e-4)
     parser.add_argument("-lr", type=float, default=5e-4)
     parser.add_argument("-span_dim", type=int, default=256)
     parser.add_argument("-model", type=str, default="bert")
     parser.add_argument("-model_size", type=str, default="base")
     parser.add_argument("-fine_tune", default=True, action="store_true")
+    parser.add_argument("-just_last_layer", default=False, action="store_true")
     parser.add_argument("-pool_method", default="avg", type=str)
     parser.add_argument("-train_frac", default=1.0, type=float,
                         help="Can reduce this for quick testing.")
@@ -168,7 +169,7 @@ def get_model_name(hp):
     opt_dict = OrderedDict()
     # Only include important options in hash computation
     imp_opts = ['model', 'model_size', 'batch_size', 'eval_steps',
-                'n_epochs',  'fine_tune', 'span_dim', 'pool_method', 'train_frac',
+                'fine_tune', 'span_dim', 'pool_method', 'train_frac',
                 'seed', 'lr']
     hp_dict = vars(hp)
     for key in imp_opts:
@@ -201,12 +202,11 @@ def write_res(all_res, output_file):
                 s1_width, s2_width, max_width, span_sep, pred, label, corr))
 
 
-def final_eval(hp, best_model_dir, val_iter, test_iter):
+def final_eval(hp, model, best_model_dir, val_iter, test_iter):
     location = path.join(best_model_dir, "model.pt")
     model_dir = path.dirname(best_model_dir)
     if path.exists(location):
         checkpoint = torch.load(location)
-        model = CorefModel(**vars(hp)).cuda()
         model.span_net.load_state_dict(checkpoint['span_net'])
         model.label_net.load_state_dict(checkpoint['label_net'])
         model.encoder.weighing_params = checkpoint['weighing_params']
@@ -293,7 +293,7 @@ def main():
               eval_steps=hp.eval_steps, num_steps=num_steps,
               init_num_stuck_evals=init_num_stuck_evals)
 
-    val_f1, test_f1 = final_eval(hp, best_model_path, val_iter, test_iter)
+    val_f1, test_f1 = final_eval(hp, model, best_model_path, val_iter, test_iter)
     perf_dir = path.join(hp.model_dir, "perf")
     if not path.exists(perf_dir):
         os.makedirs(perf_dir)

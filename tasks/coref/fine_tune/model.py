@@ -5,13 +5,14 @@ from encoders.pretrained_transformers.span_reprs import get_span_module
 
 
 class CorefModel(nn.Module):
-    def __init__(self, model='bert', model_size='base',
+    def __init__(self, model='bert', model_size='base', just_last_layer=False,
                  span_dim=256, pool_method='avg', fine_tune=False, num_spans=1,
                  **kwargs):
         super(CorefModel, self).__init__()
 
         self.pool_method = pool_method
         self.num_spans = num_spans
+        self.just_last_layer = just_last_layer
         self.encoder = Encoder(model=model, model_size=model_size, fine_tune=True,
                                cased=True)
         self.span_net = nn.ModuleDict()
@@ -42,7 +43,7 @@ class CorefModel(nn.Module):
 
     def forward(self, batch_data):
         text, text_len = batch_data.text
-        encoded_input = self.encoder(text.cuda())
+        encoded_input = self.encoder(text.cuda(), just_last_layer=self.just_last_layer)
 
         s1_repr = self.calc_span_repr(encoded_input, batch_data.span1.cuda(), index='0')
         if self.num_spans > 1:
