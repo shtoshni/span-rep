@@ -1,10 +1,10 @@
-**/data/
-__pycache__/
-**/checkpoints/
+data
+__pycache__
+checkpoints
 local_output/
 **/slurm*
-*.ipynb_checkpoints/
+.ipynb_checkpoints
 *.ipynb
 *.jpg
-**/notebooks/*
-**/plots/*
+notebooks
+plots

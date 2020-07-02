@@ -5,10 +5,11 @@ from encoders.pretrained_transformers.span_reprs import get_span_module
 
 class TaskModel(nn.Module):
     def __init__(self, encoder,
-                 span_dim=256, pool_method='avg',
+                 span_dim=256, pool_method='avg', just_last_layer=False,
                  **kwargs):
         super(TaskModel, self).__init__()
         self.encoder = encoder
+        self.just_last_layer = just_last_layer
         self.pool_method = pool_method
         self.span_net = nn.ModuleDict()
         self.span_net['0'] = get_span_module(
@@ -52,7 +53,7 @@ class TaskModel(nn.Module):
 
     def forward(self, batch_data):
         text, text_len = batch_data.text
-        encoded_input = self.encoder(text.cuda())
+        encoded_input = self.encoder(text.cuda(), just_last_layer=self.just_last_layer)
 
         s_repr = self.calc_span_repr(encoded_input, batch_data.span.cuda())
         pred_label = self.label_net(s_repr)

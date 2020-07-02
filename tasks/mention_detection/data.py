@@ -74,9 +74,9 @@ class TaskDataset(Dataset):
 
 if __name__ == '__main__':
     from encoders.pretrained_transformers import Encoder
-    encoder = Encoder(cased=False)
+    encoder = Encoder(cased=True)
     path = "/home/shtoshni/Research/hackathon_2019/tasks/mention_detection/data/mention"
-    train_iter, val_iter, test_iter = TaskDataset.iters(path, encoder, train_frac=0.1)
+    train_iter, val_iter, test_iter = TaskDataset.iters(path, encoder, train_frac=1.0)
 
     print("Train size:", len(train_iter.data()))
     print("Val size:", len(val_iter.data()))

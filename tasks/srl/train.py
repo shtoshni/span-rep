@@ -144,7 +144,6 @@ def eval(model, val_iter):
             fp += torch.sum((1 - label) * pred)
             fn += torch.sum(label * (1 - pred))
 
-
             batch_size = label.shape[0]
             span1 = batch_data.orig_span1
             span2 = batch_data.orig_span2
@@ -155,7 +154,6 @@ def eval(model, val_iter):
                                 'pred': torch.sum(pred[idx, :]),
                                 'label_vec': label[idx, :],
                                 'pred_vec': pred[idx, :]})
-
 
     if tp > 0:
         recall = tp/(tp + fn)
