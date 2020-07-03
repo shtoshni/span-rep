@@ -1,19 +1,19 @@
 import torch
 import torch.nn as nn
 import logging
+from packaging import version
 
-from transformers import BertModel, RobertaModel, GPT2Model, XLNetModel
-from transformers import BertTokenizer, RobertaTokenizer, GPT2Tokenizer, XLNetTokenizer
+import transformers
+from transformers import BertModel, RobertaModel, XLNetModel
+from transformers import BertTokenizer, RobertaTokenizer, XLNetTokenizer
 
 from encoders.pretrained_transformers.SpanBERT import BertModel as SpanbertModel
-from encoders.pretrained_transformers.utils import get_sequence_mask
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
 # Constants
-MODEL_LIST = ['bert', 'spanbert', 'roberta', 'xlnet', 'gpt2']
+MODEL_LIST = ['bert', 'spanbert', 'roberta', 'xlnet']
 BERT_MODEL_SIZES = ['base', 'large']
-GPT2_MODEL_SIZES = ['small', 'medium', 'large']
 
 
 class Encoder(nn.Module):
@@ -38,7 +38,7 @@ class Encoder(nn.Module):
             # For other models this choice doesn't make sense since they are trained
             # on cased version of text.
             do_lower_case = True
-            
+
         # Model is one of the BERT variants
         if 'bert' in model:
             assert (model_size in BERT_MODEL_SIZES)
@@ -71,8 +71,7 @@ class Encoder(nn.Module):
                 # the model using that codebase (based on pytorch_pretrained_bert).
                 # NOTE: By default transformer models are initialized to eval() mode!
                 # Not using the eval() mode will result in randomness.
-                self.model = SpanbertModel.from_pretrained(
-                    model_name).eval()
+                self.model = SpanbertModel.from_pretrained(model_name).eval()
                 # SpanBERT uses the same tokenizer as BERT (that's why the slicing in model name).
                 # We use the tokenizer from "transformers" since it provides an almost unified API.
                 self.tokenizer = BertTokenizer.from_pretrained(
@@ -87,21 +86,6 @@ class Encoder(nn.Module):
             self.tokenizer = XLNetTokenizer.from_pretrained(model_name, do_lower_case=do_lower_case)
             self.num_layers = self.model.config.num_hidden_layers + 1
             self.hidden_size = self.model.config.hidden_size
-        elif model == 'gpt2':
-            assert (model_size in GPT2_MODEL_SIZES)
-            model_name = model
-            if model_size != "small":
-                model_name += "-" + model_size
-
-            self.model = GPT2Model.from_pretrained(
-                model_name, output_hidden_states=True)
-            # Set the EOS token to be the PAD token since no explicit pad token
-            # in GPT2 implementation.
-            self.tokenizer = GPT2Tokenizer.from_pretrained(
-                model_name, do_lower_case=do_lower_case, pad_token="<|endoftext|>")
-
-            self.num_layers = self.model.config.n_layer + 1
-            self.hidden_size = self.model.config.n_embd
 
         # Set the model name
         self.model_name = model_name
@@ -129,10 +113,6 @@ class Encoder(nn.Module):
         # Set parameters required on top of pre-trained models
         self.weighing_params = nn.Parameter(torch.ones(self.num_layers))
 
-        # Attention-based Span representation parameters - MIGHT NOT BE USED
-        self.attention_params = nn.Linear(self.hidden_size, 1)
-        nn.init.constant_(self.attention_params.weight, 0)
-
     def tokenize(self, sentence, get_subword_indices=False, force_split=False):
         """
         sentence: A single sentence where the sentence is either a string or list.
@@ -151,10 +131,7 @@ class Encoder(nn.Module):
             # Operate directly on a string
             if type(sentence) is list:
                 sentence = ' '.join(sentence)
-            token_ids = tokenizer.encode(
-                sentence, add_special_tokens=(
-                    False if self.base_name == 'gpt2' else True)
-                )
+            token_ids = tokenizer.encode(sentence, add_special_tokens=True)
             return token_ids
 
         elif get_subword_indices:
@@ -168,7 +145,7 @@ class Encoder(nn.Module):
                 try:
                     sentence = tokenizer.basic_tokenizer.tokenize(sentence)
                 except AttributeError:
-                    # Basic tokenizer is not a part of Roberta and GPT2
+                    # Basic tokenizer is not a part of Roberta
                     sentence = sentence.strip().split()
 
             if self.base_name in ['bert', 'spanbert', 'xlnet']:
@@ -180,7 +157,7 @@ class Encoder(nn.Module):
                     subword_to_word_idx += [word_idx] * len(subword_ids)
                     token_ids += subword_ids
 
-            elif self.base_name in ['roberta', 'gpt2']:
+            elif self.base_name in ['roberta']:
                 token_ids = []
                 for word_idx, word in enumerate(sentence):
                     subword_list = tokenizer.tokenize(word, add_prefix_space=True)
@@ -192,12 +169,14 @@ class Encoder(nn.Module):
                 raise Exception("%s doesn't support getting word indices"
                                 % self.base_name)
 
-            # In case the model is supported
-            if self.base_name == 'gpt2':
-                final_token_ids = token_ids
+            # Add special tokens
+            if version.parse(transformers.__version__) > version.parse('2.0.0'):
+                # Long term API
+                final_token_ids = tokenizer.build_inputs_with_special_tokens(token_ids)
             else:
-                final_token_ids = tokenizer.add_special_tokens_single_sequence(
-                    token_ids)
+                # This API was in use when we started
+                final_token_ids = tokenizer.add_special_tokens_single_sequence(token_ids)
+
             # Add -1 to denote the special symbols
             subword_to_word_idx = (
                 [-1] * self.start_shift + subword_to_word_idx + [-1] * self.end_shift)
@@ -275,75 +254,6 @@ class Encoder(nn.Module):
         else:
             return (batch_token_ids, batch_lens)
 
-    def get_sentence_repr(self, encoded_input, sentence_lens, method='avg'):
-        """Get the sentence encoding of a batch of hidden states.
-        encoded_input: B x L_max x H: Output of the pretrained model
-        sentence_lens: B: Length of sentences in the batch
-        repr_method: Method to reduce the sentence representation to a single vector
-        """
-        # First get input mask
-        batch_size, max_len, h_size = encoded_input.shape
-        # Remove the [SEP] or </s> token from calculation for sentence length
-        # This allows us to mask out the suffix entirely including padding symbols
-        actual_sentence_lens = sentence_lens - self.end_shift
-        encoded_input = encoded_input[:, :(max_len - self.end_shift), :]
-        input_mask = get_sequence_mask(actual_sentence_lens).cuda().float()  # B x L
-        input_mask = torch.unsqueeze(input_mask, dim=2).expand_as(encoded_input)
-        # Mask/Zero out values beyond sentence length
-        encoded_input = encoded_input * input_mask
-
-        # Now remove the start token from calculation as well
-        actual_sentence_lens = actual_sentence_lens - self.start_shift
-        assert (torch.min(actual_sentence_lens) > 0)
-
-        if method == 'avg':
-            # Summing over the padded symbols won't change the actual sum since they have
-            # been masked out
-            sent_repr = torch.sum(encoded_input[:, self.start_shift:, :], dim=1)
-            # Now divide by sentence lengths
-            sent_repr = sent_repr/torch.unsqueeze(actual_sentence_lens, dim=1).float()
-            return sent_repr
-        elif method == 'max':
-            # To avoid errors in max, we can use the mask to make the padded entries affect
-            # max operation. We will just add the min entry to earlier zeroed out padded symbols.
-            min_val = torch.min(encoded_input)
-            encoded_input = encoded_input + (1 - input_mask) * min_val
-            return torch.max(encoded_input[:, self.start_shift:, :], dim=1)[0]
-        elif method == "attn":
-            attn_mask = (1 - input_mask) * (-1e10)
-            attn_logits = (self.attention_params(encoded_input[:, self.start_shift:, :])
-                           + attn_mask[:, self.start_shift:, :])
-            attention_wts = nn.functional.softmax(attn_logits, dim=1)
-            return torch.sum(attention_wts * encoded_input[:, self.start_shift:, :], dim=1)
-        else:
-            # First get the end point hidden vectors
-            h_start = encoded_input[:, self.start_shift, :]
-            h_end = encoded_input[torch.arange(batch_size), sentence_lens - 1 - self.end_shift, :]
-
-            if method == 'diff':
-                return (h_end - h_start)
-            elif method == 'diff_sum':
-                # Used by Ouchi et al
-                return torch.cat([h_end - h_start, h_end + h_start], dim=1)
-            elif method == 'coherent':
-                # Used by Seo et al - https://arxiv.org/pdf/1906.05807.pdf
-                # Use a partition size of one fourth
-                p_size = int(h_size/4)
-                coherence_term = torch.sum(
-                    h_start[:, 2*p_size:3*p_size] * h_end[:, 3*p_size:], dim=1, keepdim=True)
-                return torch.cat(
-                    [h_start[:, :p_size], h_end[:, p_size:2*p_size], coherence_term], dim=1)
-            elif method == 'coref':
-                attn_mask = (1 - input_mask) * (-1e10)
-                attn_logits = (self.attention_params(encoded_input[:, self.start_shift:, :])
-                               + attn_mask[:, self.start_shift:, :])
-                attention_wts = nn.functional.softmax(attn_logits, dim=1)
-                attention_term = torch.sum(attention_wts * encoded_input[:, self.start_shift:, :],
-                                           dim=1)
-                return torch.cat([h_start, h_end, attention_term], dim=1)
-
-            return torch.cat([h_start, h_end], dim=1)
-
     def forward(self, batch_ids, just_last_layer=False):
         """
         Encode a batch of token IDs.
@@ -377,14 +287,10 @@ class Encoder(nn.Module):
                 last_layer_states, _,  encoded_layers = self.model(
                     batch_ids, attention_mask=input_mask)  # B x L x E
             # # Encoded layers also has the embedding layer - 0th entry
-            # encoded_layers = encoded_layers[1:]
-
-        # print(len(encoded_layers))
 
         if just_last_layer:
             output = last_layer_states
         else:
-
             wtd_encoded_repr = 0
             soft_weight = nn.functional.softmax(self.weighing_params, dim=0)
 
@@ -408,11 +314,3 @@ if __name__ == '__main__':
     for idx in range(tokenized_input.shape[0]):
         print(model.tokenizer.convert_ids_to_tokens(
             tokenized_input[idx, :].tolist()))
-
-    for method in ["avg", "max", "diff", "diff_sum", "coherent", "attn"]:
-        print(method, model.get_sentence_repr(output, input_lengths, method=method).shape)
-
-    # Sanity check since the attention weights are initialized to 0, the two reprs should match
-    avg_repr = model.get_sentence_repr(output, input_lengths, method="avg")
-    attn_repr = model.get_sentence_repr(output, input_lengths, method="attn")
-    print("Diff: %.3f" % (torch.norm(avg_repr - attn_repr)))
